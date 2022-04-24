@@ -14,9 +14,12 @@
 
 		Cute net provides you a way to securely connect clients to servers, and
 		implements all the machinery for sending both reliable-in-order and
-		fire-and-forget (UDP style) packets. This is great for many kinds of games,
-		ranging from games who just want TCP-style packets (such as a turn-based
-		RPG), to fast paced platformer or fighting games.
+		fire-and-forget (UDP style) packets.
+
+		Security is baked in with connect tokens, all over UDP with optional support
+		for reliable-in-order packets. This makes cute net great for many kinds of
+		games, ranging from games who just want TCP-style packets (such as a turn-
+		based RPG), to fast paced platformer or fighting games.
 
 
 	FEATURES
@@ -109,13 +112,13 @@
 			|    Web    |
 			|  Service  |
 			+-----------+
-			    ^  |
-			    |  |                            +-----------+              +-----------+
+				^  |
+				|  |                            +-----------+              +-----------+
 			  REST Call                         | Dedicated |              | Dedicated |
 			  returns a                         | Server  1 |              | Server  2 |
 			Connect Token                       +-----------+              +-----------+
-			    |  |                                  ^                          ^
-			    |  v                                  |                          |
+				|  |                                  ^                          ^
+				|  v                                  |                          |
 			 +--------+   *connect token packet* ->   |   if fail, try next ->   |
 			 | Client |-------------------------------+--------------------------+----------> ... Token timeout!
 			 +--------+
@@ -124,21 +127,18 @@
 
 		The function `cn_generate_connect_token` can be used to generate connect tokens for the web service to distribute.
 
+		Here is a full example of a client and server, where the client sends a string to the
+		server to print to the console.
+
+			Client example: https://gist.github.com/RandyGaul/e45def05353e244055dde11e7a04ac71
+			Server example: https://gist.github.com/RandyGaul/f3b3c0864d760c37de74be2a573c52e5
+
 		The web service distributes connect tokens. Cute net does not provide an implementation
 		of a web service because there are many different good solutions out there already. The
 		goal is to only respond and provide connect tokens to clients who have authenticated
 		themselves over a secure connection with the web service, such as through HTTPS. For
 		example: this is how cute net can be used to filter out players who have no purchased the
 		game or signed up with an account.
-
-
-	EXAMPLES
-	
-		Here is a full example of a client and server, where the client sends a string to the
-		server to print to the console.
-
-			Client example: https://gist.github.com/RandyGaul/e45def05353e244055dde11e7a04ac71
-			Server example: https://gist.github.com/RandyGaul/f3b3c0864d760c37de74be2a573c52e5
 
 
 	UNIT TESTS
@@ -187,15 +187,16 @@
 #define CN_NET_H
 
 #ifndef _CRT_SECURE_NO_WARNINGS
-	#define _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
 #endif
 
 #ifndef _CRT_NONSTDC_NO_DEPRECATE
-	#define _CRT_NONSTDC_NO_DEPRECATE
+#define _CRT_NONSTDC_NO_DEPRECATE
 #endif
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 typedef struct cn_error_t cn_error_t;
 typedef struct cn_client_t cn_client_t;
@@ -213,63 +214,40 @@ typedef struct cn_crypto_signature_t { uint8_t bytes[64]; } cn_crypto_signature_
 //--------------------------------------------------------------------------------------------------
 // ENDPOINT
 
-typedef enum cn_address_type_t
-{
+typedef enum cn_address_type_t {
 	CN_ADDRESS_TYPE_NONE,
 	CN_ADDRESS_TYPE_IPV4,
 	CN_ADDRESS_TYPE_IPV6
 } cn_address_type_t;
 
-typedef struct cn_endpoint_t
-{
+struct cn_endpoint_t {
 	cn_address_type_t type;
 	uint16_t port;
 
-	union
-	{
+	union {
 		uint8_t ipv4[4];
 		uint16_t ipv6[8];
 	} u;
-} cn_endpoint_t;
+};
 
 //--------------------------------------------------------------------------------------------------
 // CONNECT TOKEN
 
 #define CN_CONNECT_TOKEN_SIZE 1114
 
-/**
- * Generates a connect token, useable by clients to authenticate and securely connect to
- * a server. You can use this function whenever a validated client wants to join your game servers.
- * 
- * It's recommended to setup a web service specifically for allowing players to authenticate
- * themselves (login). Once authenticated, the webservice can call this function and hand
- * the connect token to the client. The client can then read the public section of the
- * connect token and see the `address_list` of servers to try and connect to. The client then
- * sends the connect token to one of these servers to start the connection handshake. If the
- * handshake completes successfully, the client will connect to the server.
- *
- * The connect token is protected by an AEAD primitive (https://en.wikipedia.org/wiki/Authenticated_encryption),
- * which means the token cannot be modified or forged as long as the `shared_secret_key` is
- * not leaked. In the event your secret key is accidentally leaked, you can always roll a
- * new one and distribute it to your webservice and game servers.
- */
 cn_error_t cn_generate_connect_token(
-	uint64_t application_id,                          // A unique number to identify your game, can be whatever value you like.
-	                                                  // This must be the same number as in `cn_client_create` and `cn_server_create`.
-	uint64_t creation_timestamp,                      // A unix timestamp of the current time.
-	const cn_crypto_key_t* client_to_server_key,      // A unique key for this connect token for the client to encrypt packets, and server to
-	                                                  // decrypt packets. This can be generated with `cn_crypto_generate_key` on your web service.
-	const cn_crypto_key_t* server_to_client_key,      // A unique key for this connect token for the server to encrypt packets, and the client to
-	                                                  // decrypt packets. This can be generated with `cn_crypto_generate_key` on your web service.
-	uint64_t expiration_timestamp,                    // A unix timestamp for when this connect token expires and becomes invalid.
-	uint32_t handshake_timeout,                       // The number of seconds the connection will stay alive during the handshake process before
-	                                                  // the client and server reject the handshake process as failed.
-	int address_count,                                // Must be from 1 to 32 (inclusive). The number of addresses in `address_list`.
-	const char** address_list,                        // A list of game servers the client can try connecting to, of length `address_count`.
-	uint64_t client_id,                               // The unique client identifier.
-	const uint8_t* user_data,                         // Optional buffer of data of `CN_PROTOCOL_CONNECT_TOKEN_USER_DATA_SIZE` (256) bytes. Can be NULL.
-	const cn_crypto_sign_secret_t* shared_secret_key, // Only your webservice and game servers know this key.
-	uint8_t* token_ptr_out                            // Pointer to your buffer, should be `CN_CONNECT_TOKEN_SIZE` bytes large.
+	uint64_t application_id,
+	uint64_t creation_timestamp,
+	const cn_crypto_key_t* client_to_server_key,
+	const cn_crypto_key_t* server_to_client_key,
+	uint64_t expiration_timestamp,
+	uint32_t handshake_timeout,
+	int address_count,
+	const char** address_list,
+	uint64_t client_id,
+	const uint8_t* user_data,
+	const cn_crypto_sign_secret_t* shared_secret_key,
+	uint8_t* token_ptr_out // Pointer to your buffer, should be `CN_CONNECT_TOKEN_SIZE` bytes large.
 );
 
 //--------------------------------------------------------------------------------------------------
@@ -278,9 +256,9 @@ cn_error_t cn_generate_connect_token(
 cn_client_t* cn_client_create(
 	uint16_t port,                            // Port for opening a UDP socket.
 	uint64_t application_id,                  // A unique number to identify your game, can be whatever value you like.
-	                                          // This must be the same number as in `cn_server_create`.
+											  // This must be the same number as in `cn_server_create`.
 	bool use_ipv6 /* = false */,              // Whether or not the socket should turn on ipv6. Some users will not have
-	                                          // ipv6 enabled, so this defaults to false.
+											  // ipv6 enabled, so this defaults to false.
 	void* user_allocator_context /* = NULL */ // Used for custom allocators, this can be set to NULL.
 );
 void cn_client_destroy(cn_client_t* client);
@@ -310,12 +288,12 @@ void cn_client_free_packet(cn_client_t* client, void* packet);
 /**
  * Sends a packet to the server. If the packet size is too large (over 1k bytes) it will be split up
  * and sent in smaller chunks.
- * 
+ *
  * `send_reliably` as true means the packet will be sent reliably an in-order relative to other
  * reliable packets. Under packet loss the packet will continually be sent until an acknowledgement
  * from the server is received. False means to send a typical UDP packet, with no special mechanisms
  * regarding packet loss.
- * 
+ *
  * Reliable packets are significantly more expensive than unreliable packets, so try to send any data
  * that can be lost due to packet loss as an unreliable packet. Of course, some packets are required
  * to be sent, and so reliable is appropriate. As an optimization some kinds of data, such as frequent
@@ -323,22 +301,21 @@ void cn_client_free_packet(cn_client_t* client, void* packet);
  */
 cn_error_t cn_client_send(cn_client_t* client, const void* packet, int size, bool send_reliably);
 
-typedef enum cn_client_state_t
-{
-	CN_CLIENT_STATE_CONNECT_TOKEN_EXPIRED         = -6,
-	CN_CLIENT_STATE_INVALID_CONNECT_TOKEN         = -5,
-	CN_CLIENT_STATE_CONNECTION_TIMED_OUT          = -4,
-	CN_CLIENT_STATE_CHALLENGE_RESPONSE_TIMED_OUT  = -3,
-	CN_CLIENT_STATE_CONNECTION_REQUEST_TIMED_OUT  = -2,
-	CN_CLIENT_STATE_CONNECTION_DENIED             = -1,
-	CN_CLIENT_STATE_DISCONNECTED                  = 0,
-	CN_CLIENT_STATE_SENDING_CONNECTION_REQUEST    = 1,
-	CN_CLIENT_STATE_SENDING_CHALLENGE_RESPONSE    = 2,
-	CN_CLIENT_STATE_CONNECTED                     = 3,
+typedef enum cn_client_state_t {
+	CN_CLIENT_STATE_CONNECT_TOKEN_EXPIRED = -6,
+	CN_CLIENT_STATE_INVALID_CONNECT_TOKEN = -5,
+	CN_CLIENT_STATE_CONNECTION_TIMED_OUT = -4,
+	CN_CLIENT_STATE_CHALLENGE_RESPONSE_TIMED_OUT = -3,
+	CN_CLIENT_STATE_CONNECTION_REQUEST_TIMED_OUT = -2,
+	CN_CLIENT_STATE_CONNECTION_DENIED = -1,
+	CN_CLIENT_STATE_DISCONNECTED = 0,
+	CN_CLIENT_STATE_SENDING_CONNECTION_REQUEST = 1,
+	CN_CLIENT_STATE_SENDING_CHALLENGE_RESPONSE = 2,
+	CN_CLIENT_STATE_CONNECTED = 3,
 } cn_client_state_t;
 
 cn_client_state_t cn_client_state_get(const cn_client_t* client);
-const char* cn_client_state_string(cn_client_state_t state); 
+const char* cn_client_state_string(cn_client_state_t state);
 float cn_client_time_of_last_packet_recieved(const cn_client_t* client);
 void cn_client_enable_network_simulator(cn_client_t* client, double latency, double jitter, double drop_chance, double duplicate_chance);
 
@@ -347,25 +324,23 @@ void cn_client_enable_network_simulator(cn_client_t* client, double latency, dou
 
 #define CN_SERVER_MAX_CLIENTS 32
 
-typedef struct cn_server_config_t
-{
+typedef struct cn_server_config_t {
 	uint64_t application_id;            // A unique number to identify your game, can be whatever value you like.
-	                                    // This must be the same number as in `cn_client_make`.
+										// This must be the same number as in `cn_client_make`.
 	int max_incoming_bytes_per_second;
 	int max_outgoing_bytes_per_second;
 	int connection_timeout;             // The number of seconds before consider a connection as timed out when not
-	                                    // receiving any packets on the connection.
+										// receiving any packets on the connection.
 	double resend_rate;                 // The number of seconds to wait before resending a packet that has not been
-	                                    // acknowledge as received by a client.
+										// acknowledge as received by a client.
 	cn_crypto_sign_public_t public_key; // The public part of your public key cryptography used for connect tokens.
-	                                    // This can be safely shared with your players publicly.
+										// This can be safely shared with your players publicly.
 	cn_crypto_sign_secret_t secret_key; // The secret part of your public key cryptography used for connect tokens.
-	                                    // This must never be shared publicly and remain a complete secret only know to your servers.
+										// This must never be shared publicly and remain a complete secret only know to your servers.
 	void* user_allocator_context;
 } cn_server_config_t;
 
-cn_server_config_t CN_INLINE cn_server_config_defaults()
-{
+cn_server_config_t CN_INLINE cn_server_config_defaults() {
 	cn_server_config_t config;
 	config.application_id = 0;
 	config.max_incoming_bytes_per_second = 0;
@@ -380,39 +355,33 @@ void cn_server_destroy(cn_server_t* server);
 
 /**
  * Starts up the server, ready to receive new client connections.
- * 
+ *
  * Please note that not all users will be able to access an ipv6 server address, so it might
  * be good to also provide a way to connect through ipv4.
  */
 cn_error_t cn_server_start(cn_server_t* server, const char* address_and_port);
 void cn_server_stop(cn_server_t* server);
 
-typedef enum cn_server_event_type_t
-{
+typedef enum cn_server_event_type_t {
 	CN_SERVER_EVENT_TYPE_NEW_CONNECTION, // A new incoming connection.
 	CN_SERVER_EVENT_TYPE_DISCONNECTED,   // A disconnecting client.
 	CN_SERVER_EVENT_TYPE_PAYLOAD_PACKET, // An incoming packet from a client.
 } cn_server_event_type_t;
 
-typedef struct cn_server_event_t
-{
+typedef struct cn_server_event_t {
 	cn_server_event_type_t type;
-	union
-	{
-		struct
-		{
+	union {
+		struct {
 			int client_index;       // An index representing this particular client.
 			uint64_t client_id;     // A unique identifier for this particular client, as read from the connect token.
 			cn_endpoint_t endpoint; // The address and port of the incoming connection.
 		} new_connection;
 
-		struct
-		{
+		struct {
 			int client_index;       // An index representing this particular client.
 		} disconnected;
 
-		struct
-		{
+		struct {
 			int client_index;       // An index representing this particular client.
 			void* data;             // Pointer to the packet's payload data. Send this back to `cn_server_free_packet` when done.
 			int size;               // Size of the packet at the data pointer.
@@ -442,11 +411,10 @@ void cn_server_enable_network_simulator(cn_server_t* server, double latency, dou
 #define CN_ERROR_SUCCESS (0)
 #define CN_ERROR_FAILURE (-1)
 
-typedef struct cn_error_t
-{
+struct cn_error_t {
 	int code;
 	const char* details;
-} cn_error_t;
+};
 
 CN_INLINE bool cn_is_error(cn_error_t err) { return err.code == CN_ERROR_FAILURE; }
 CN_INLINE cn_error_t cn_error_failure(const char* details) { cn_error_t error; error.code = CN_ERROR_FAILURE; error.details = details; return error; }
@@ -488,24 +456,24 @@ CN_INLINE cn_error_t cn_error_success() { cn_error_t error; error.code = CN_ERRO
 #endif
 
 #if !defined(CN_ALLOC)
-	#include <stdlib.h>
-	#define CN_ALLOC(size, ctx) malloc(size)
-	#define CN_FREE(mem, ctx) free(mem)
+#include <stdlib.h>
+#define CN_ALLOC(size, ctx) malloc(size);
+#define CN_FREE(mem, ctx) free(mem)
 #endif
 
 #if !defined(CN_MEMCPY)
-	#include <string.h>
-	#define CN_MEMCPY memcpy
+#include <string.h>
+#define CN_MEMCPY memcpy
 #endif
 
 #if !defined(CN_MEMSET)
-	#include <string.h>
-	#define CN_MEMSET memset
+#include <string.h>
+#define CN_MEMSET memset
 #endif
 
 #if !defined(CN_ASSERT)
-	#include <assert.h>
-	#define CN_ASSERT assert
+#include <assert.h>
+#define CN_ASSERT assert
 #endif
 
 #ifndef CN_STRNCPY
@@ -579,26 +547,26 @@ extern "C" {
 #define HYDRO_VERSION_MAJOR 1
 #define HYDRO_VERSION_MINOR 0
 
-int hydro_init(void);
+	int hydro_init(void);
 
-/* ---------------- */
+	/* ---------------- */
 
 #define hydro_random_SEEDBYTES 32
 
-uint32_t hydro_random_u32(void);
+	uint32_t hydro_random_u32(void);
 
-uint32_t hydro_random_uniform(const uint32_t upper_bound);
+	uint32_t hydro_random_uniform(const uint32_t upper_bound);
 
-void hydro_random_buf(void *out, size_t out_len);
+	void hydro_random_buf(void* out, size_t out_len);
 
-void hydro_random_buf_deterministic(void *out, size_t out_len,
-									const uint8_t seed[hydro_random_SEEDBYTES]);
+	void hydro_random_buf_deterministic(void* out, size_t out_len,
+		const uint8_t seed[hydro_random_SEEDBYTES]);
 
-void hydro_random_ratchet(void);
+	void hydro_random_ratchet(void);
 
-void hydro_random_reseed(void);
+	void hydro_random_reseed(void);
 
-/* ---------------- */
+	/* ---------------- */
 
 #define hydro_hash_BYTES 32
 #define hydro_hash_BYTES_MAX 65535
@@ -606,66 +574,66 @@ void hydro_random_reseed(void);
 #define hydro_hash_CONTEXTBYTES 8
 #define hydro_hash_KEYBYTES 32
 
-typedef struct hydro_hash_state {
-	uint32_t state[12];
-	uint8_t  buf_off;
-	uint8_t  align[3];
-} hydro_hash_state;
+	typedef struct hydro_hash_state {
+		uint32_t state[12];
+		uint8_t  buf_off;
+		uint8_t  align[3];
+	} hydro_hash_state;
 
-void hydro_hash_keygen(uint8_t key[hydro_hash_KEYBYTES]);
+	void hydro_hash_keygen(uint8_t key[hydro_hash_KEYBYTES]);
 
-int hydro_hash_init(hydro_hash_state *state, const char ctx[hydro_hash_CONTEXTBYTES],
-					const uint8_t key[hydro_hash_KEYBYTES]);
+	int hydro_hash_init(hydro_hash_state* state, const char ctx[hydro_hash_CONTEXTBYTES],
+		const uint8_t key[hydro_hash_KEYBYTES]);
 
-int hydro_hash_update(hydro_hash_state *state, const void *in_, size_t in_len);
+	int hydro_hash_update(hydro_hash_state* state, const void* in_, size_t in_len);
 
-int hydro_hash_final(hydro_hash_state *state, uint8_t *out, size_t out_len);
+	int hydro_hash_final(hydro_hash_state* state, uint8_t* out, size_t out_len);
 
-int hydro_hash_hash(uint8_t *out, size_t out_len, const void *in_, size_t in_len,
-					const char    ctx[hydro_hash_CONTEXTBYTES],
-					const uint8_t key[hydro_hash_KEYBYTES]);
+	int hydro_hash_hash(uint8_t* out, size_t out_len, const void* in_, size_t in_len,
+		const char    ctx[hydro_hash_CONTEXTBYTES],
+		const uint8_t key[hydro_hash_KEYBYTES]);
 
-/* ---------------- */
+	/* ---------------- */
 
 #define hydro_secretbox_CONTEXTBYTES 8
 #define hydro_secretbox_HEADERBYTES (20 + 16)
 #define hydro_secretbox_KEYBYTES 32
 #define hydro_secretbox_PROBEBYTES 16
 
-void hydro_secretbox_keygen(uint8_t key[hydro_secretbox_KEYBYTES]);
+	void hydro_secretbox_keygen(uint8_t key[hydro_secretbox_KEYBYTES]);
 
-int hydro_secretbox_encrypt(uint8_t *c, const void *m_, size_t mlen, uint64_t msg_id,
-							const char    ctx[hydro_secretbox_CONTEXTBYTES],
-							const uint8_t key[hydro_secretbox_KEYBYTES]);
+	int hydro_secretbox_encrypt(uint8_t* c, const void* m_, size_t mlen, uint64_t msg_id,
+		const char    ctx[hydro_secretbox_CONTEXTBYTES],
+		const uint8_t key[hydro_secretbox_KEYBYTES]);
 
-int hydro_secretbox_decrypt(void *m_, const uint8_t *c, size_t clen, uint64_t msg_id,
-							const char    ctx[hydro_secretbox_CONTEXTBYTES],
-							const uint8_t key[hydro_secretbox_KEYBYTES])
-	_hydro_attr_warn_unused_result_;
+	int hydro_secretbox_decrypt(void* m_, const uint8_t* c, size_t clen, uint64_t msg_id,
+		const char    ctx[hydro_secretbox_CONTEXTBYTES],
+		const uint8_t key[hydro_secretbox_KEYBYTES])
+		_hydro_attr_warn_unused_result_;
 
-void hydro_secretbox_probe_create(uint8_t probe[hydro_secretbox_PROBEBYTES], const uint8_t *c,
-								  size_t c_len, const char ctx[hydro_secretbox_CONTEXTBYTES],
-								  const uint8_t key[hydro_secretbox_KEYBYTES]);
+	void hydro_secretbox_probe_create(uint8_t probe[hydro_secretbox_PROBEBYTES], const uint8_t* c,
+		size_t c_len, const char ctx[hydro_secretbox_CONTEXTBYTES],
+		const uint8_t key[hydro_secretbox_KEYBYTES]);
 
-int hydro_secretbox_probe_verify(const uint8_t probe[hydro_secretbox_PROBEBYTES], const uint8_t *c,
-								 size_t c_len, const char ctx[hydro_secretbox_CONTEXTBYTES],
-								 const uint8_t key[hydro_secretbox_KEYBYTES])
-	_hydro_attr_warn_unused_result_;
+	int hydro_secretbox_probe_verify(const uint8_t probe[hydro_secretbox_PROBEBYTES], const uint8_t* c,
+		size_t c_len, const char ctx[hydro_secretbox_CONTEXTBYTES],
+		const uint8_t key[hydro_secretbox_KEYBYTES])
+		_hydro_attr_warn_unused_result_;
 
-/* ---------------- */
+	/* ---------------- */
 
 #define hydro_kdf_CONTEXTBYTES 8
 #define hydro_kdf_KEYBYTES 32
 #define hydro_kdf_BYTES_MAX 65535
 #define hydro_kdf_BYTES_MIN 16
 
-void hydro_kdf_keygen(uint8_t key[hydro_kdf_KEYBYTES]);
+	void hydro_kdf_keygen(uint8_t key[hydro_kdf_KEYBYTES]);
 
-int hydro_kdf_derive_from_key(uint8_t *subkey, size_t subkey_len, uint64_t subkey_id,
-							  const char    ctx[hydro_kdf_CONTEXTBYTES],
-							  const uint8_t key[hydro_kdf_KEYBYTES]);
+	int hydro_kdf_derive_from_key(uint8_t* subkey, size_t subkey_len, uint64_t subkey_id,
+		const char    ctx[hydro_kdf_CONTEXTBYTES],
+		const uint8_t key[hydro_kdf_KEYBYTES]);
 
-/* ---------------- */
+	/* ---------------- */
 
 #define hydro_sign_BYTES 64
 #define hydro_sign_CONTEXTBYTES 8
@@ -673,40 +641,40 @@ int hydro_kdf_derive_from_key(uint8_t *subkey, size_t subkey_len, uint64_t subke
 #define hydro_sign_SECRETKEYBYTES 64
 #define hydro_sign_SEEDBYTES 32
 
-typedef struct hydro_sign_state {
-	hydro_hash_state hash_st;
-} hydro_sign_state;
+	typedef struct hydro_sign_state {
+		hydro_hash_state hash_st;
+	} hydro_sign_state;
 
-typedef struct hydro_sign_keypair {
-	uint8_t pk[hydro_sign_PUBLICKEYBYTES];
-	uint8_t sk[hydro_sign_SECRETKEYBYTES];
-} hydro_sign_keypair;
+	typedef struct hydro_sign_keypair {
+		uint8_t pk[hydro_sign_PUBLICKEYBYTES];
+		uint8_t sk[hydro_sign_SECRETKEYBYTES];
+	} hydro_sign_keypair;
 
-void hydro_sign_keygen(hydro_sign_keypair *kp);
+	void hydro_sign_keygen(hydro_sign_keypair* kp);
 
-void hydro_sign_keygen_deterministic(hydro_sign_keypair *kp,
-									 const uint8_t       seed[hydro_sign_SEEDBYTES]);
+	void hydro_sign_keygen_deterministic(hydro_sign_keypair* kp,
+		const uint8_t       seed[hydro_sign_SEEDBYTES]);
 
-int hydro_sign_init(hydro_sign_state *state, const char ctx[hydro_sign_CONTEXTBYTES]);
+	int hydro_sign_init(hydro_sign_state* state, const char ctx[hydro_sign_CONTEXTBYTES]);
 
-int hydro_sign_update(hydro_sign_state *state, const void *m_, size_t mlen);
+	int hydro_sign_update(hydro_sign_state* state, const void* m_, size_t mlen);
 
-int hydro_sign_final_create(hydro_sign_state *state, uint8_t csig[hydro_sign_BYTES],
-							const uint8_t sk[hydro_sign_SECRETKEYBYTES]);
+	int hydro_sign_final_create(hydro_sign_state* state, uint8_t csig[hydro_sign_BYTES],
+		const uint8_t sk[hydro_sign_SECRETKEYBYTES]);
 
-int hydro_sign_final_verify(hydro_sign_state *state, const uint8_t csig[hydro_sign_BYTES],
-							const uint8_t pk[hydro_sign_PUBLICKEYBYTES])
-	_hydro_attr_warn_unused_result_;
+	int hydro_sign_final_verify(hydro_sign_state* state, const uint8_t csig[hydro_sign_BYTES],
+		const uint8_t pk[hydro_sign_PUBLICKEYBYTES])
+		_hydro_attr_warn_unused_result_;
 
-int hydro_sign_create(uint8_t csig[hydro_sign_BYTES], const void *m_, size_t mlen,
-					  const char    ctx[hydro_sign_CONTEXTBYTES],
-					  const uint8_t sk[hydro_sign_SECRETKEYBYTES]);
+	int hydro_sign_create(uint8_t csig[hydro_sign_BYTES], const void* m_, size_t mlen,
+		const char    ctx[hydro_sign_CONTEXTBYTES],
+		const uint8_t sk[hydro_sign_SECRETKEYBYTES]);
 
-int hydro_sign_verify(const uint8_t csig[hydro_sign_BYTES], const void *m_, size_t mlen,
-					  const char    ctx[hydro_sign_CONTEXTBYTES],
-					  const uint8_t pk[hydro_sign_PUBLICKEYBYTES]) _hydro_attr_warn_unused_result_;
+	int hydro_sign_verify(const uint8_t csig[hydro_sign_BYTES], const void* m_, size_t mlen,
+		const char    ctx[hydro_sign_CONTEXTBYTES],
+		const uint8_t pk[hydro_sign_PUBLICKEYBYTES]) _hydro_attr_warn_unused_result_;
 
-/* ---------------- */
+	/* ---------------- */
 
 #define hydro_kx_SESSIONKEYBYTES 32
 #define hydro_kx_PUBLICKEYBYTES 32
@@ -714,151 +682,151 @@ int hydro_sign_verify(const uint8_t csig[hydro_sign_BYTES], const void *m_, size
 #define hydro_kx_PSKBYTES 32
 #define hydro_kx_SEEDBYTES 32
 
-typedef struct hydro_kx_keypair {
-	uint8_t pk[hydro_kx_PUBLICKEYBYTES];
-	uint8_t sk[hydro_kx_SECRETKEYBYTES];
-} hydro_kx_keypair;
+	typedef struct hydro_kx_keypair {
+		uint8_t pk[hydro_kx_PUBLICKEYBYTES];
+		uint8_t sk[hydro_kx_SECRETKEYBYTES];
+	} hydro_kx_keypair;
 
-typedef struct hydro_kx_session_keypair {
-	uint8_t rx[hydro_kx_SESSIONKEYBYTES];
-	uint8_t tx[hydro_kx_SESSIONKEYBYTES];
-} hydro_kx_session_keypair;
+	typedef struct hydro_kx_session_keypair {
+		uint8_t rx[hydro_kx_SESSIONKEYBYTES];
+		uint8_t tx[hydro_kx_SESSIONKEYBYTES];
+	} hydro_kx_session_keypair;
 
-typedef struct hydro_kx_state {
-	hydro_kx_keypair eph_kp;
-	hydro_hash_state h_st;
-} hydro_kx_state;
+	typedef struct hydro_kx_state {
+		hydro_kx_keypair eph_kp;
+		hydro_hash_state h_st;
+	} hydro_kx_state;
 
-void hydro_kx_keygen(hydro_kx_keypair *static_kp);
+	void hydro_kx_keygen(hydro_kx_keypair* static_kp);
 
-void hydro_kx_keygen_deterministic(hydro_kx_keypair *static_kp,
-								   const uint8_t     seed[hydro_kx_SEEDBYTES]);
+	void hydro_kx_keygen_deterministic(hydro_kx_keypair* static_kp,
+		const uint8_t     seed[hydro_kx_SEEDBYTES]);
 
-/* NOISE_N */
+	/* NOISE_N */
 
 #define hydro_kx_N_PACKET1BYTES (32 + 16)
 
-int hydro_kx_n_1(hydro_kx_session_keypair *kp, uint8_t packet1[hydro_kx_N_PACKET1BYTES],
-				 const uint8_t psk[hydro_kx_PSKBYTES],
-				 const uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES]);
+	int hydro_kx_n_1(hydro_kx_session_keypair* kp, uint8_t packet1[hydro_kx_N_PACKET1BYTES],
+		const uint8_t psk[hydro_kx_PSKBYTES],
+		const uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES]);
 
-int hydro_kx_n_2(hydro_kx_session_keypair *kp, const uint8_t packet1[hydro_kx_N_PACKET1BYTES],
-				 const uint8_t psk[hydro_kx_PSKBYTES], const hydro_kx_keypair *static_kp);
+	int hydro_kx_n_2(hydro_kx_session_keypair* kp, const uint8_t packet1[hydro_kx_N_PACKET1BYTES],
+		const uint8_t psk[hydro_kx_PSKBYTES], const hydro_kx_keypair* static_kp);
 
-/* NOISE_KK */
+	/* NOISE_KK */
 
 #define hydro_kx_KK_PACKET1BYTES (32 + 16)
 #define hydro_kx_KK_PACKET2BYTES (32 + 16)
 
-int hydro_kx_kk_1(hydro_kx_state *state, uint8_t packet1[hydro_kx_KK_PACKET1BYTES],
-				  const uint8_t           peer_static_pk[hydro_kx_PUBLICKEYBYTES],
-				  const hydro_kx_keypair *static_kp);
+	int hydro_kx_kk_1(hydro_kx_state* state, uint8_t packet1[hydro_kx_KK_PACKET1BYTES],
+		const uint8_t           peer_static_pk[hydro_kx_PUBLICKEYBYTES],
+		const hydro_kx_keypair* static_kp);
 
-int hydro_kx_kk_2(hydro_kx_session_keypair *kp, uint8_t packet2[hydro_kx_KK_PACKET2BYTES],
-				  const uint8_t           packet1[hydro_kx_KK_PACKET1BYTES],
-				  const uint8_t           peer_static_pk[hydro_kx_PUBLICKEYBYTES],
-				  const hydro_kx_keypair *static_kp);
+	int hydro_kx_kk_2(hydro_kx_session_keypair* kp, uint8_t packet2[hydro_kx_KK_PACKET2BYTES],
+		const uint8_t           packet1[hydro_kx_KK_PACKET1BYTES],
+		const uint8_t           peer_static_pk[hydro_kx_PUBLICKEYBYTES],
+		const hydro_kx_keypair* static_kp);
 
-int hydro_kx_kk_3(hydro_kx_state *state, hydro_kx_session_keypair *kp,
-				  const uint8_t           packet2[hydro_kx_KK_PACKET2BYTES],
-				  const hydro_kx_keypair *static_kp);
+	int hydro_kx_kk_3(hydro_kx_state* state, hydro_kx_session_keypair* kp,
+		const uint8_t           packet2[hydro_kx_KK_PACKET2BYTES],
+		const hydro_kx_keypair* static_kp);
 
-/* NOISE_XX */
+	/* NOISE_XX */
 
 #define hydro_kx_XX_PACKET1BYTES (32 + 16)
 #define hydro_kx_XX_PACKET2BYTES (32 + 32 + 16 + 16)
 #define hydro_kx_XX_PACKET3BYTES (32 + 16 + 16)
 
-int hydro_kx_xx_1(hydro_kx_state *state, uint8_t packet1[hydro_kx_XX_PACKET1BYTES],
-				  const uint8_t psk[hydro_kx_PSKBYTES]);
+	int hydro_kx_xx_1(hydro_kx_state* state, uint8_t packet1[hydro_kx_XX_PACKET1BYTES],
+		const uint8_t psk[hydro_kx_PSKBYTES]);
 
-int hydro_kx_xx_2(hydro_kx_state *state, uint8_t packet2[hydro_kx_XX_PACKET2BYTES],
-				  const uint8_t packet1[hydro_kx_XX_PACKET1BYTES],
-				  const uint8_t psk[hydro_kx_PSKBYTES], const hydro_kx_keypair *static_kp);
+	int hydro_kx_xx_2(hydro_kx_state* state, uint8_t packet2[hydro_kx_XX_PACKET2BYTES],
+		const uint8_t packet1[hydro_kx_XX_PACKET1BYTES],
+		const uint8_t psk[hydro_kx_PSKBYTES], const hydro_kx_keypair* static_kp);
 
-int hydro_kx_xx_3(hydro_kx_state *state, hydro_kx_session_keypair *kp,
-				  uint8_t       packet3[hydro_kx_XX_PACKET3BYTES],
-				  uint8_t       peer_static_pk[hydro_kx_PUBLICKEYBYTES],
-				  const uint8_t packet2[hydro_kx_XX_PACKET2BYTES],
-				  const uint8_t psk[hydro_kx_PSKBYTES], const hydro_kx_keypair *static_kp);
+	int hydro_kx_xx_3(hydro_kx_state* state, hydro_kx_session_keypair* kp,
+		uint8_t       packet3[hydro_kx_XX_PACKET3BYTES],
+		uint8_t       peer_static_pk[hydro_kx_PUBLICKEYBYTES],
+		const uint8_t packet2[hydro_kx_XX_PACKET2BYTES],
+		const uint8_t psk[hydro_kx_PSKBYTES], const hydro_kx_keypair* static_kp);
 
-int hydro_kx_xx_4(hydro_kx_state *state, hydro_kx_session_keypair *kp,
-				  uint8_t       peer_static_pk[hydro_kx_PUBLICKEYBYTES],
-				  const uint8_t packet3[hydro_kx_XX_PACKET3BYTES],
-				  const uint8_t psk[hydro_kx_PSKBYTES]);
+	int hydro_kx_xx_4(hydro_kx_state* state, hydro_kx_session_keypair* kp,
+		uint8_t       peer_static_pk[hydro_kx_PUBLICKEYBYTES],
+		const uint8_t packet3[hydro_kx_XX_PACKET3BYTES],
+		const uint8_t psk[hydro_kx_PSKBYTES]);
 
-/* NOISE_NK */
+	/* NOISE_NK */
 
 #define hydro_kx_NK_PACKET1BYTES (32 + 16)
 #define hydro_kx_NK_PACKET2BYTES (32 + 16)
 
-int hydro_kx_nk_1(hydro_kx_state *state, uint8_t packet1[hydro_kx_NK_PACKET1BYTES],
-				  const uint8_t psk[hydro_kx_PSKBYTES],
-				  const uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES]);
+	int hydro_kx_nk_1(hydro_kx_state* state, uint8_t packet1[hydro_kx_NK_PACKET1BYTES],
+		const uint8_t psk[hydro_kx_PSKBYTES],
+		const uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES]);
 
-int hydro_kx_nk_2(hydro_kx_session_keypair *kp, uint8_t packet2[hydro_kx_NK_PACKET2BYTES],
-				  const uint8_t packet1[hydro_kx_NK_PACKET1BYTES],
-				  const uint8_t psk[hydro_kx_PSKBYTES], const hydro_kx_keypair *static_kp);
+	int hydro_kx_nk_2(hydro_kx_session_keypair* kp, uint8_t packet2[hydro_kx_NK_PACKET2BYTES],
+		const uint8_t packet1[hydro_kx_NK_PACKET1BYTES],
+		const uint8_t psk[hydro_kx_PSKBYTES], const hydro_kx_keypair* static_kp);
 
-int hydro_kx_nk_3(hydro_kx_state *state, hydro_kx_session_keypair *kp,
-				  const uint8_t packet2[hydro_kx_NK_PACKET2BYTES]);
+	int hydro_kx_nk_3(hydro_kx_state* state, hydro_kx_session_keypair* kp,
+		const uint8_t packet2[hydro_kx_NK_PACKET2BYTES]);
 
-/* ---------------- */
+	/* ---------------- */
 
 #define hydro_pwhash_CONTEXTBYTES 8
 #define hydro_pwhash_MASTERKEYBYTES 32
 #define hydro_pwhash_STOREDBYTES 128
 
-void hydro_pwhash_keygen(uint8_t master_key[hydro_pwhash_MASTERKEYBYTES]);
+	void hydro_pwhash_keygen(uint8_t master_key[hydro_pwhash_MASTERKEYBYTES]);
 
-int hydro_pwhash_deterministic(uint8_t *h, size_t h_len, const char *passwd, size_t passwd_len,
-							   const char    ctx[hydro_pwhash_CONTEXTBYTES],
-							   const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
-							   uint64_t opslimit, size_t memlimit, uint8_t threads);
+	int hydro_pwhash_deterministic(uint8_t* h, size_t h_len, const char* passwd, size_t passwd_len,
+		const char    ctx[hydro_pwhash_CONTEXTBYTES],
+		const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
+		uint64_t opslimit, size_t memlimit, uint8_t threads);
 
-int hydro_pwhash_create(uint8_t stored[hydro_pwhash_STOREDBYTES], const char *passwd,
-						size_t passwd_len, const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
-						uint64_t opslimit, size_t memlimit, uint8_t threads);
+	int hydro_pwhash_create(uint8_t stored[hydro_pwhash_STOREDBYTES], const char* passwd,
+		size_t passwd_len, const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
+		uint64_t opslimit, size_t memlimit, uint8_t threads);
 
-int hydro_pwhash_verify(const uint8_t stored[hydro_pwhash_STOREDBYTES], const char *passwd,
-						size_t passwd_len, const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
-						uint64_t opslimit_max, size_t memlimit_max, uint8_t threads_max);
+	int hydro_pwhash_verify(const uint8_t stored[hydro_pwhash_STOREDBYTES], const char* passwd,
+		size_t passwd_len, const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
+		uint64_t opslimit_max, size_t memlimit_max, uint8_t threads_max);
 
-int hydro_pwhash_derive_static_key(uint8_t *static_key, size_t static_key_len,
-								   const uint8_t stored[hydro_pwhash_STOREDBYTES],
-								   const char *passwd, size_t passwd_len,
-								   const char    ctx[hydro_pwhash_CONTEXTBYTES],
-								   const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
-								   uint64_t opslimit_max, size_t memlimit_max, uint8_t threads_max);
+	int hydro_pwhash_derive_static_key(uint8_t* static_key, size_t static_key_len,
+		const uint8_t stored[hydro_pwhash_STOREDBYTES],
+		const char* passwd, size_t passwd_len,
+		const char    ctx[hydro_pwhash_CONTEXTBYTES],
+		const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
+		uint64_t opslimit_max, size_t memlimit_max, uint8_t threads_max);
 
-int hydro_pwhash_reencrypt(uint8_t       stored[hydro_pwhash_STOREDBYTES],
-						   const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
-						   const uint8_t new_master_key[hydro_pwhash_MASTERKEYBYTES]);
+	int hydro_pwhash_reencrypt(uint8_t       stored[hydro_pwhash_STOREDBYTES],
+		const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
+		const uint8_t new_master_key[hydro_pwhash_MASTERKEYBYTES]);
 
-int hydro_pwhash_upgrade(uint8_t       stored[hydro_pwhash_STOREDBYTES],
-						 const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES], uint64_t opslimit,
-						 size_t memlimit, uint8_t threads);
+	int hydro_pwhash_upgrade(uint8_t       stored[hydro_pwhash_STOREDBYTES],
+		const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES], uint64_t opslimit,
+		size_t memlimit, uint8_t threads);
 
-/* ---------------- */
+	/* ---------------- */
 
-void hydro_memzero(void *pnt, size_t len);
+	void hydro_memzero(void* pnt, size_t len);
 
-void hydro_increment(uint8_t *n, size_t len);
+	void hydro_increment(uint8_t* n, size_t len);
 
-bool hydro_equal(const void *b1_, const void *b2_, size_t len);
+	bool hydro_equal(const void* b1_, const void* b2_, size_t len);
 
-int hydro_compare(const uint8_t *b1_, const uint8_t *b2_, size_t len);
+	int hydro_compare(const uint8_t* b1_, const uint8_t* b2_, size_t len);
 
-char *hydro_bin2hex(char *hex, size_t hex_maxlen, const uint8_t *bin, size_t bin_len);
+	char* hydro_bin2hex(char* hex, size_t hex_maxlen, const uint8_t* bin, size_t bin_len);
 
-int hydro_hex2bin(uint8_t *bin, size_t bin_maxlen, const char *hex, size_t hex_len,
-				  const char *ignore, const char **hex_end_p);
+	int hydro_hex2bin(uint8_t* bin, size_t bin_maxlen, const char* hex, size_t hex_len,
+		const char* ignore, const char** hex_end_p);
 
-int hydro_pad(unsigned char *buf, size_t unpadded_buflen, size_t blocksize, size_t max_buflen);
+	int hydro_pad(unsigned char* buf, size_t unpadded_buflen, size_t blocksize, size_t max_buflen);
 
-int hydro_unpad(const unsigned char *buf, size_t padded_buflen, size_t blocksize);
+	int hydro_unpad(const unsigned char* buf, size_t padded_buflen, size_t blocksize);
 
-/* ---------------- */
+	/* ---------------- */
 
 #define HYDRO_HWTYPE_ATMEGA328 1
 
@@ -935,109 +903,103 @@ int hydro_unpad(const unsigned char *buf, size_t padded_buflen, size_t blocksize
 
 #define LOAD64_LE(SRC) load64_le(SRC)
 static inline uint64_t
-load64_le(const uint8_t src[8])
-{
+load64_le(const uint8_t src[8]) {
 #ifdef NATIVE_LITTLE_ENDIAN
 	uint64_t w;
 	memcpy(&w, src, sizeof w);
 	return w;
 #else
-	uint64_t w = (uint64_t) src[0];
-	w |= (uint64_t) src[1] << 8;
-	w |= (uint64_t) src[2] << 16;
-	w |= (uint64_t) src[3] << 24;
-	w |= (uint64_t) src[4] << 32;
-	w |= (uint64_t) src[5] << 40;
-	w |= (uint64_t) src[6] << 48;
-	w |= (uint64_t) src[7] << 56;
+	uint64_t w = (uint64_t)src[0];
+	w |= (uint64_t)src[1] << 8;
+	w |= (uint64_t)src[2] << 16;
+	w |= (uint64_t)src[3] << 24;
+	w |= (uint64_t)src[4] << 32;
+	w |= (uint64_t)src[5] << 40;
+	w |= (uint64_t)src[6] << 48;
+	w |= (uint64_t)src[7] << 56;
 	return w;
 #endif
 }
 
 #define STORE64_LE(DST, W) store64_le((DST), (W))
 static inline void
-store64_le(uint8_t dst[8], uint64_t w)
-{
+store64_le(uint8_t dst[8], uint64_t w) {
 #ifdef NATIVE_LITTLE_ENDIAN
 	memcpy(dst, &w, sizeof w);
 #else
-	dst[0] = (uint8_t) w;
+	dst[0] = (uint8_t)w;
 	w >>= 8;
-	dst[1] = (uint8_t) w;
+	dst[1] = (uint8_t)w;
 	w >>= 8;
-	dst[2] = (uint8_t) w;
+	dst[2] = (uint8_t)w;
 	w >>= 8;
-	dst[3] = (uint8_t) w;
+	dst[3] = (uint8_t)w;
 	w >>= 8;
-	dst[4] = (uint8_t) w;
+	dst[4] = (uint8_t)w;
 	w >>= 8;
-	dst[5] = (uint8_t) w;
+	dst[5] = (uint8_t)w;
 	w >>= 8;
-	dst[6] = (uint8_t) w;
+	dst[6] = (uint8_t)w;
 	w >>= 8;
-	dst[7] = (uint8_t) w;
+	dst[7] = (uint8_t)w;
 #endif
 }
 
 #define LOAD32_LE(SRC) load32_le(SRC)
 static inline uint32_t
-load32_le(const uint8_t src[4])
-{
+load32_le(const uint8_t src[4]) {
 #ifdef NATIVE_LITTLE_ENDIAN
 	uint32_t w;
 	memcpy(&w, src, sizeof w);
 	return w;
 #else
-	uint32_t w = (uint32_t) src[0];
-	w |= (uint32_t) src[1] << 8;
-	w |= (uint32_t) src[2] << 16;
-	w |= (uint32_t) src[3] << 24;
+	uint32_t w = (uint32_t)src[0];
+	w |= (uint32_t)src[1] << 8;
+	w |= (uint32_t)src[2] << 16;
+	w |= (uint32_t)src[3] << 24;
 	return w;
 #endif
 }
 
 #define STORE32_LE(DST, W) store32_le((DST), (W))
 static inline void
-store32_le(uint8_t dst[4], uint32_t w)
-{
+store32_le(uint8_t dst[4], uint32_t w) {
 #ifdef NATIVE_LITTLE_ENDIAN
 	memcpy(dst, &w, sizeof w);
 #else
-	dst[0] = (uint8_t) w;
+	dst[0] = (uint8_t)w;
 	w >>= 8;
-	dst[1] = (uint8_t) w;
+	dst[1] = (uint8_t)w;
 	w >>= 8;
-	dst[2] = (uint8_t) w;
+	dst[2] = (uint8_t)w;
 	w >>= 8;
-	dst[3] = (uint8_t) w;
+	dst[3] = (uint8_t)w;
 #endif
 }
 
 #define LOAD16_LE(SRC) load16_le(SRC)
 static inline uint16_t
-load16_le(const uint8_t src[2])
-{
+load16_le(const uint8_t src[2]) {
 #ifdef NATIVE_LITTLE_ENDIAN
 	uint16_t w;
 	memcpy(&w, src, sizeof w);
 	return w;
 #else
-	uint16_t w = (uint16_t) src[0];
-	w |= (uint16_t) src[1] << 8;
+	uint16_t w = (uint16_t)src[0];
+	w |= (uint16_t)src[1] << 8;
 	return w;
 #endif
 }
 
 #define STORE16_LE(DST, W) store16_le((DST), (W))
 static inline void
-store16_le(uint8_t dst[2], uint16_t w)
-{
+store16_le(uint8_t dst[2], uint16_t w) {
 #ifdef NATIVE_LITTLE_ENDIAN
 	memcpy(dst, &w, sizeof w);
 #else
-	dst[0] = (uint8_t) w;
+	dst[0] = (uint8_t)w;
 	w >>= 8;
-	dst[1] = (uint8_t) w;
+	dst[1] = (uint8_t)w;
 #endif
 }
 
@@ -1045,117 +1007,110 @@ store16_le(uint8_t dst[2], uint16_t w)
 
 #define LOAD64_BE(SRC) load64_be(SRC)
 static inline uint64_t
-load64_be(const uint8_t src[8])
-{
+load64_be(const uint8_t src[8]) {
 #ifdef NATIVE_BIG_ENDIAN
 	uint64_t w;
 	memcpy(&w, src, sizeof w);
 	return w;
 #else
-	uint64_t w = (uint64_t) src[7];
-	w |= (uint64_t) src[6] << 8;
-	w |= (uint64_t) src[5] << 16;
-	w |= (uint64_t) src[4] << 24;
-	w |= (uint64_t) src[3] << 32;
-	w |= (uint64_t) src[2] << 40;
-	w |= (uint64_t) src[1] << 48;
-	w |= (uint64_t) src[0] << 56;
+	uint64_t w = (uint64_t)src[7];
+	w |= (uint64_t)src[6] << 8;
+	w |= (uint64_t)src[5] << 16;
+	w |= (uint64_t)src[4] << 24;
+	w |= (uint64_t)src[3] << 32;
+	w |= (uint64_t)src[2] << 40;
+	w |= (uint64_t)src[1] << 48;
+	w |= (uint64_t)src[0] << 56;
 	return w;
 #endif
 }
 
 #define STORE64_BE(DST, W) store64_be((DST), (W))
 static inline void
-store64_be(uint8_t dst[8], uint64_t w)
-{
+store64_be(uint8_t dst[8], uint64_t w) {
 #ifdef NATIVE_BIG_ENDIAN
 	memcpy(dst, &w, sizeof w);
 #else
-	dst[7] = (uint8_t) w;
+	dst[7] = (uint8_t)w;
 	w >>= 8;
-	dst[6] = (uint8_t) w;
+	dst[6] = (uint8_t)w;
 	w >>= 8;
-	dst[5] = (uint8_t) w;
+	dst[5] = (uint8_t)w;
 	w >>= 8;
-	dst[4] = (uint8_t) w;
+	dst[4] = (uint8_t)w;
 	w >>= 8;
-	dst[3] = (uint8_t) w;
+	dst[3] = (uint8_t)w;
 	w >>= 8;
-	dst[2] = (uint8_t) w;
+	dst[2] = (uint8_t)w;
 	w >>= 8;
-	dst[1] = (uint8_t) w;
+	dst[1] = (uint8_t)w;
 	w >>= 8;
-	dst[0] = (uint8_t) w;
+	dst[0] = (uint8_t)w;
 #endif
 }
 
 #define LOAD32_BE(SRC) load32_be(SRC)
 static inline uint32_t
-load32_be(const uint8_t src[4])
-{
+load32_be(const uint8_t src[4]) {
 #ifdef NATIVE_BIG_ENDIAN
 	uint32_t w;
 	memcpy(&w, src, sizeof w);
 	return w;
 #else
-	uint32_t w = (uint32_t) src[3];
-	w |= (uint32_t) src[2] << 8;
-	w |= (uint32_t) src[1] << 16;
-	w |= (uint32_t) src[0] << 24;
+	uint32_t w = (uint32_t)src[3];
+	w |= (uint32_t)src[2] << 8;
+	w |= (uint32_t)src[1] << 16;
+	w |= (uint32_t)src[0] << 24;
 	return w;
 #endif
 }
 
 #define STORE32_BE(DST, W) store32_be((DST), (W))
 static inline void
-store32_be(uint8_t dst[4], uint32_t w)
-{
+store32_be(uint8_t dst[4], uint32_t w) {
 #ifdef NATIVE_BIG_ENDIAN
 	memcpy(dst, &w, sizeof w);
 #else
-	dst[3] = (uint8_t) w;
+	dst[3] = (uint8_t)w;
 	w >>= 8;
-	dst[2] = (uint8_t) w;
+	dst[2] = (uint8_t)w;
 	w >>= 8;
-	dst[1] = (uint8_t) w;
+	dst[1] = (uint8_t)w;
 	w >>= 8;
-	dst[0] = (uint8_t) w;
+	dst[0] = (uint8_t)w;
 #endif
 }
 
 #define LOAD16_BE(SRC) load16_be(SRC)
 static inline uint16_t
-load16_be(const uint8_t src[2])
-{
+load16_be(const uint8_t src[2]) {
 #ifdef NATIVE_BIG_ENDIAN
 	uint16_t w;
 	memcpy(&w, src, sizeof w);
 	return w;
 #else
-	uint16_t w = (uint16_t) src[1];
-	w |= (uint16_t) src[0] << 8;
+	uint16_t w = (uint16_t)src[1];
+	w |= (uint16_t)src[0] << 8;
 	return w;
 #endif
 }
 
 #define STORE16_BE(DST, W) store16_be((DST), (W))
 static inline void
-store16_be(uint8_t dst[2], uint16_t w)
-{
+store16_be(uint8_t dst[2], uint16_t w) {
 #ifdef NATIVE_BIG_ENDIAN
 	memcpy(dst, &w, sizeof w);
 #else
-	dst[1] = (uint8_t) w;
+	dst[1] = (uint8_t)w;
 	w >>= 8;
-	dst[0] = (uint8_t) w;
+	dst[0] = (uint8_t)w;
 #endif
 }
 
 static inline void
-mem_cpy(void *__restrict__ dst_, const void *__restrict__ src_, size_t n)
-{
-	unsigned char *      dst = (unsigned char *) dst_;
-	const unsigned char *src = (const unsigned char *) src_;
+mem_cpy(void* __restrict__ dst_, const void* __restrict__ src_, size_t n) {
+	unsigned char* dst = (unsigned char*)dst_;
+	const unsigned char* src = (const unsigned char*)src_;
 	size_t               i;
 
 	for (i = 0; i < n; i++) {
@@ -1164,9 +1119,8 @@ mem_cpy(void *__restrict__ dst_, const void *__restrict__ src_, size_t n)
 }
 
 static inline void
-mem_zero(void *dst_, size_t n)
-{
-	unsigned char *dst = (unsigned char *) dst_;
+mem_zero(void* dst_, size_t n) {
+	unsigned char* dst = (unsigned char*)dst_;
 	size_t         i;
 
 	for (i = 0; i < n; i++) {
@@ -1175,10 +1129,9 @@ mem_zero(void *dst_, size_t n)
 }
 
 static inline void
-mem_xor(void *__restrict__ dst_, const void *__restrict__ src_, size_t n)
-{
-	unsigned char *      dst = (unsigned char *) dst_;
-	const unsigned char *src = (const unsigned char *) src_;
+mem_xor(void* __restrict__ dst_, const void* __restrict__ src_, size_t n) {
+	unsigned char* dst = (unsigned char*)dst_;
+	const unsigned char* src = (const unsigned char*)src_;
 	size_t               i;
 
 	for (i = 0; i < n; i++) {
@@ -1187,12 +1140,11 @@ mem_xor(void *__restrict__ dst_, const void *__restrict__ src_, size_t n)
 }
 
 static inline void
-mem_xor2(void *__restrict__ dst_, const void *__restrict__ src1_, const void *__restrict__ src2_,
-		 size_t n)
-{
-	unsigned char *      dst  = (unsigned char *) dst_;
-	const unsigned char *src1 = (const unsigned char *) src1_;
-	const unsigned char *src2 = (const unsigned char *) src2_;
+mem_xor2(void* __restrict__ dst_, const void* __restrict__ src1_, const void* __restrict__ src2_,
+	size_t n) {
+	unsigned char* dst = (unsigned char*)dst_;
+	const unsigned char* src1 = (const unsigned char*)src1_;
+	const unsigned char* src2 = (const unsigned char*)src2_;
 	size_t               i;
 
 	for (i = 0; i < n; i++) {
@@ -1224,16 +1176,14 @@ static int hydro_random_init(void);
 static void gimli_core_u8(uint8_t state_u8[gimli_BLOCKBYTES], uint8_t tag);
 
 static inline void
-gimli_pad_u8(uint8_t buf[gimli_BLOCKBYTES], size_t pos, uint8_t domain)
-{
+gimli_pad_u8(uint8_t buf[gimli_BLOCKBYTES], size_t pos, uint8_t domain) {
 	buf[pos] ^= (domain << 1) | 1;
 	buf[gimli_RATE - 1] ^= 0x80;
 }
 
 static inline void
-hydro_mem_ct_zero_u32(uint32_t *dst_, size_t n)
-{
-	volatile uint32_t *volatile dst = (volatile uint32_t * volatile)(void *) dst_;
+hydro_mem_ct_zero_u32(uint32_t* dst_, size_t n) {
+	volatile uint32_t* volatile dst = (volatile uint32_t* volatile)(void*)dst_;
 	size_t i;
 
 	for (i = 0; i < n; i++) {
@@ -1241,13 +1191,12 @@ hydro_mem_ct_zero_u32(uint32_t *dst_, size_t n)
 	}
 }
 
-static inline uint32_t hydro_mem_ct_cmp_u32(const uint32_t *b1_, const uint32_t *b2,
-											size_t n) _hydro_attr_warn_unused_result_;
+static inline uint32_t hydro_mem_ct_cmp_u32(const uint32_t* b1_, const uint32_t* b2,
+	size_t n) _hydro_attr_warn_unused_result_;
 
 static inline uint32_t
-hydro_mem_ct_cmp_u32(const uint32_t *b1_, const uint32_t *b2, size_t n)
-{
-	const volatile uint32_t *volatile b1 = (const volatile uint32_t *volatile)(const void *) b1_;
+hydro_mem_ct_cmp_u32(const uint32_t* b1_, const uint32_t* b2, size_t n) {
+	const volatile uint32_t* volatile b1 = (const volatile uint32_t* volatile)(const void*)b1_;
 	size_t   i;
 	uint32_t cv = 0;
 
@@ -1259,9 +1208,9 @@ hydro_mem_ct_cmp_u32(const uint32_t *b1_, const uint32_t *b2, size_t n)
 
 /* ---------------- */
 
-static int hydro_hash_init_with_tweak(hydro_hash_state *state,
-									  const char ctx[hydro_hash_CONTEXTBYTES], uint64_t tweak,
-									  const uint8_t key[hydro_hash_KEYBYTES]);
+static int hydro_hash_init_with_tweak(hydro_hash_state* state,
+	const char ctx[hydro_hash_CONTEXTBYTES], uint64_t tweak,
+	const uint8_t key[hydro_hash_KEYBYTES]);
 
 /* ---------------- */
 
@@ -1275,22 +1224,21 @@ static int hydro_hash_init_with_tweak(hydro_hash_state *state,
 #define hydro_x25519_SECRETKEYBYTES 32
 
 static int hydro_x25519_scalarmult(uint8_t       out[hydro_x25519_BYTES],
-								   const uint8_t scalar[hydro_x25519_SECRETKEYBYTES],
-								   const uint8_t x1[hydro_x25519_PUBLICKEYBYTES],
-								   bool          clamp) _hydro_attr_warn_unused_result_;
+	const uint8_t scalar[hydro_x25519_SECRETKEYBYTES],
+	const uint8_t x1[hydro_x25519_PUBLICKEYBYTES],
+	bool          clamp) _hydro_attr_warn_unused_result_;
 
 static inline int hydro_x25519_scalarmult_base(uint8_t       pk[hydro_x25519_PUBLICKEYBYTES],
-											   const uint8_t sk[hydro_x25519_SECRETKEYBYTES])
+	const uint8_t sk[hydro_x25519_SECRETKEYBYTES])
 	_hydro_attr_warn_unused_result_;
 
 static inline void
 hydro_x25519_scalarmult_base_uniform(uint8_t       pk[hydro_x25519_PUBLICKEYBYTES],
-									 const uint8_t sk[hydro_x25519_SECRETKEYBYTES]);
+	const uint8_t sk[hydro_x25519_SECRETKEYBYTES]);
 
 
 int
-hydro_init(void)
-{
+hydro_init(void) {
 	if (hydro_random_init() != 0) {
 		abort();
 	}
@@ -1298,13 +1246,12 @@ hydro_init(void)
 }
 
 void
-hydro_memzero(void *pnt, size_t len)
-{
+hydro_memzero(void* pnt, size_t len) {
 #ifdef HAVE_EXPLICIT_BZERO
 	explicit_bzero(pnt, len);
 #else
-	volatile unsigned char *volatile pnt_ = (volatile unsigned char *volatile) pnt;
-	size_t i                              = (size_t) 0U;
+	volatile unsigned char* volatile pnt_ = (volatile unsigned char* volatile)pnt;
+	size_t i = (size_t)0U;
 
 	while (i < len) {
 		pnt_[i++] = 0U;
@@ -1313,22 +1260,20 @@ hydro_memzero(void *pnt, size_t len)
 }
 
 void
-hydro_increment(uint8_t *n, size_t len)
-{
+hydro_increment(uint8_t* n, size_t len) {
 	size_t        i;
 	uint_fast16_t c = 1U;
 
 	for (i = 0; i < len; i++) {
-		c += (uint_fast16_t) n[i];
-		n[i] = (uint8_t) c;
+		c += (uint_fast16_t)n[i];
+		n[i] = (uint8_t)c;
 		c >>= 8;
 	}
 }
 
-char *
-hydro_bin2hex(char *hex, size_t hex_maxlen, const uint8_t *bin, size_t bin_len)
-{
-	size_t       i = (size_t) 0U;
+char*
+hydro_bin2hex(char* hex, size_t hex_maxlen, const uint8_t* bin, size_t bin_len) {
+	size_t       i = (size_t)0U;
 	unsigned int x;
 	int          b;
 	int          c;
@@ -1339,11 +1284,11 @@ hydro_bin2hex(char *hex, size_t hex_maxlen, const uint8_t *bin, size_t bin_len)
 	while (i < bin_len) {
 		c = bin[i] & 0xf;
 		b = bin[i] >> 4;
-		x = (unsigned char) (87U + c + (((c - 10U) >> 8) & ~38U)) << 8 |
-			(unsigned char) (87U + b + (((b - 10U) >> 8) & ~38U));
-		hex[i * 2U] = (char) x;
+		x = (unsigned char)(87U + c + (((c - 10U) >> 8) & ~38U)) << 8 |
+			(unsigned char)(87U + b + (((b - 10U) >> 8) & ~38U));
+		hex[i * 2U] = (char)x;
 		x >>= 8;
-		hex[i * 2U + 1U] = (char) x;
+		hex[i * 2U + 1U] = (char)x;
 		i++;
 	}
 	hex[i * 2U] = 0U;
@@ -1352,12 +1297,11 @@ hydro_bin2hex(char *hex, size_t hex_maxlen, const uint8_t *bin, size_t bin_len)
 }
 
 int
-hydro_hex2bin(uint8_t *bin, size_t bin_maxlen, const char *hex, size_t hex_len, const char *ignore,
-			  const char **hex_end_p)
-{
-	size_t        bin_pos = (size_t) 0U;
-	size_t        hex_pos = (size_t) 0U;
-	int           ret     = 0;
+hydro_hex2bin(uint8_t* bin, size_t bin_maxlen, const char* hex, size_t hex_len, const char* ignore,
+	const char** hex_end_p) {
+	size_t        bin_pos = (size_t)0U;
+	size_t        hex_pos = (size_t)0U;
+	int           ret = 0;
 	unsigned char c;
 	unsigned char c_alpha0, c_alpha;
 	unsigned char c_num0, c_num;
@@ -1366,10 +1310,10 @@ hydro_hex2bin(uint8_t *bin, size_t bin_maxlen, const char *hex, size_t hex_len, 
 	unsigned char state = 0U;
 
 	while (hex_pos < hex_len) {
-		c        = (unsigned char) hex[hex_pos];
-		c_num    = c ^ 48U;
-		c_num0   = (c_num - 10U) >> 8;
-		c_alpha  = (c & ~32U) - 55U;
+		c = (unsigned char)hex[hex_pos];
+		c_num = c ^ 48U;
+		c_num0 = (c_num - 10U) >> 8;
+		c_alpha = (c & ~32U) - 55U;
 		c_alpha0 = ((c_alpha - 10U) ^ (c_alpha - 16U)) >> 8;
 		if ((c_num0 | c_alpha0) == 0U) {
 			if (ignore != NULL && state == 0U && strchr(ignore, c) != NULL) {
@@ -1380,7 +1324,7 @@ hydro_hex2bin(uint8_t *bin, size_t bin_maxlen, const char *hex, size_t hex_len, 
 		}
 		c_val = (uint8_t)((c_num0 & c_num) | (c_alpha0 & c_alpha));
 		if (bin_pos >= bin_maxlen) {
-			ret   = -1;
+			ret = -1;
 			errno = ERANGE;
 			break;
 		}
@@ -1395,30 +1339,29 @@ hydro_hex2bin(uint8_t *bin, size_t bin_maxlen, const char *hex, size_t hex_len, 
 	if (state != 0U) {
 		hex_pos--;
 		errno = EINVAL;
-		ret   = -1;
+		ret = -1;
 	}
 	if (ret != 0) {
-		bin_pos = (size_t) 0U;
+		bin_pos = (size_t)0U;
 	}
 	if (hex_end_p != NULL) {
 		*hex_end_p = &hex[hex_pos];
 	} else if (hex_pos != hex_len) {
 		errno = EINVAL;
-		ret   = -1;
+		ret = -1;
 	}
 	if (ret != 0) {
 		return ret;
 	}
-	return (int) bin_pos;
+	return (int)bin_pos;
 }
 
 bool
-hydro_equal(const void *b1_, const void *b2_, size_t len)
-{
-	const volatile uint8_t *volatile b1 = (const volatile uint8_t *volatile) b1_;
-	const uint8_t *b2                   = (const uint8_t *) b2_;
+hydro_equal(const void* b1_, const void* b2_, size_t len) {
+	const volatile uint8_t* volatile b1 = (const volatile uint8_t* volatile)b1_;
+	const uint8_t* b2 = (const uint8_t*)b2_;
 	size_t         i;
-	uint8_t        d = (uint8_t) 0U;
+	uint8_t        d = (uint8_t)0U;
 
 	if (b1 == b2) {
 		d = ~d;
@@ -1426,16 +1369,15 @@ hydro_equal(const void *b1_, const void *b2_, size_t len)
 	for (i = 0U; i < len; i++) {
 		d |= b1[i] ^ b2[i];
 	}
-	return (bool) (1 & ((d - 1) >> 8));
+	return (bool)(1 & ((d - 1) >> 8));
 }
 
 int
-hydro_compare(const uint8_t *b1_, const uint8_t *b2_, size_t len)
-{
-	const volatile uint8_t *volatile b1 = (const volatile uint8_t *volatile) b1_;
-	const uint8_t *b2                   = (const uint8_t *) b2_;
-	uint8_t        gt                   = 0U;
-	uint8_t        eq                   = 1U;
+hydro_compare(const uint8_t* b1_, const uint8_t* b2_, size_t len) {
+	const volatile uint8_t* volatile b1 = (const volatile uint8_t* volatile)b1_;
+	const uint8_t* b2 = (const uint8_t*)b2_;
+	uint8_t        gt = 0U;
+	uint8_t        eq = 1U;
 	size_t         i;
 
 	i = len;
@@ -1444,13 +1386,12 @@ hydro_compare(const uint8_t *b1_, const uint8_t *b2_, size_t len)
 		gt |= ((b2[i] - b1[i]) >> 8) & eq;
 		eq &= ((b2[i] ^ b1[i]) - 1) >> 8;
 	}
-	return (int) (gt + gt + eq) - 1;
+	return (int)(gt + gt + eq) - 1;
 }
 
 int
-hydro_pad(unsigned char *buf, size_t unpadded_buflen, size_t blocksize, size_t max_buflen)
-{
-	unsigned char *        tail;
+hydro_pad(unsigned char* buf, size_t unpadded_buflen, size_t blocksize, size_t max_buflen) {
+	unsigned char* tail;
 	size_t                 i;
 	size_t                 xpadlen;
 	size_t                 xpadded_len;
@@ -1476,20 +1417,19 @@ hydro_pad(unsigned char *buf, size_t unpadded_buflen, size_t blocksize, size_t m
 	tail = &buf[xpadded_len];
 	mask = 0U;
 	for (i = 0; i < blocksize; i++) {
-		barrier_mask = (unsigned char) (((i ^ xpadlen) - 1U) >> ((sizeof(size_t) - 1U) * CHAR_BIT));
-		tail[-i]     = (tail[-i] & mask) | (0x80 & barrier_mask);
+		barrier_mask = (unsigned char)(((i ^ xpadlen) - 1U) >> ((sizeof(size_t) - 1U) * CHAR_BIT));
+		tail[-i] = (tail[-i] & mask) | (0x80 & barrier_mask);
 		mask |= barrier_mask;
 	}
-	return (int) (xpadded_len + 1);
+	return (int)(xpadded_len + 1);
 }
 
 int
-hydro_unpad(const unsigned char *buf, size_t padded_buflen, size_t blocksize)
-{
-	const unsigned char *tail;
+hydro_unpad(const unsigned char* buf, size_t padded_buflen, size_t blocksize) {
+	const unsigned char* tail;
 	unsigned char        acc = 0U;
 	unsigned char        c;
-	unsigned char        valid   = 0U;
+	unsigned char        valid = 0U;
 	volatile size_t      pad_len = 0U;
 	size_t               i;
 	size_t               is_barrier;
@@ -1500,168 +1440,161 @@ hydro_unpad(const unsigned char *buf, size_t padded_buflen, size_t blocksize)
 	tail = &buf[padded_buflen - 1U];
 
 	for (i = 0U; i < blocksize; i++) {
-		c          = tail[-i];
+		c = tail[-i];
 		is_barrier = (((acc - 1U) & (pad_len - 1U) & ((c ^ 0x80) - 1U)) >> 8) & 1U;
 		acc |= c;
 		pad_len |= (i & -is_barrier);
-		valid |= (unsigned char) is_barrier;
+		valid |= (unsigned char)is_barrier;
 	}
 	if (valid == 0) {
 		return -1;
 	}
-	return (int) (padded_buflen - 1 - pad_len);
+	return (int)(padded_buflen - 1 - pad_len);
 }
 
 #ifdef __SSE2__
 
-	#include <emmintrin.h>
-	#ifdef __SSSE3__
-	# include <tmmintrin.h>
-	#endif
+#include <emmintrin.h>
+#ifdef __SSSE3__
+# include <tmmintrin.h>
+#endif
 
-	#define S 9
+#define S 9
 
-	static inline __m128i
-	shift(__m128i x, int bits)
-	{
-		return _mm_slli_epi32(x, bits);
+static inline __m128i
+shift(__m128i x, int bits) {
+	return _mm_slli_epi32(x, bits);
+}
+
+static inline __m128i
+rotate(__m128i x, int bits) {
+	return _mm_slli_epi32(x, bits) | _mm_srli_epi32(x, 32 - bits);
+}
+
+#ifdef __SSSE3__
+static inline __m128i
+rotate24(__m128i x) {
+	return _mm_shuffle_epi8(x, _mm_set_epi8(12, 15, 14, 13, 8, 11, 10, 9, 4, 7, 6, 5, 0, 3, 2, 1));
+}
+#else
+static inline __m128i
+rotate24(__m128i x) {
+	uint8_t _hydro_attr_aligned_(16) x8[16], y8[16];
+
+	_mm_storeu_si128((__m128i*) (void*) x8, x);
+
+	y8[0] = x8[1]; y8[1] = x8[2]; y8[2] = x8[3]; y8[3] = x8[0];
+	y8[4] = x8[5]; y8[5] = x8[6]; y8[6] = x8[7]; y8[7] = x8[4];
+	y8[8] = x8[9]; y8[9] = x8[10]; y8[10] = x8[11]; y8[11] = x8[8];
+	y8[12] = x8[13]; y8[13] = x8[14]; y8[14] = x8[15]; y8[15] = x8[12];
+
+	return _mm_loadu_si128((const __m128i*) (const void*) y8);
+}
+#endif
+
+static const uint32_t coeffs[24] _hydro_attr_aligned_(16) = {
+	0x9e377904, 0, 0, 0, 0x9e377908, 0, 0, 0, 0x9e37790c, 0, 0, 0,
+	0x9e377910, 0, 0, 0, 0x9e377914, 0, 0, 0, 0x9e377918, 0, 0, 0,
+};
+
+static void
+gimli_core(uint32_t state[gimli_BLOCKBYTES / 4]) {
+	__m128i x = _mm_loadu_si128((const __m128i*) (const void*) & state[0]);
+	__m128i y = _mm_loadu_si128((const __m128i*) (const void*) & state[4]);
+	__m128i z = _mm_loadu_si128((const __m128i*) (const void*) & state[8]);
+	__m128i newy;
+	__m128i newz;
+	int     round;
+
+	for (round = 5; round >= 0; round--) {
+		x = rotate24(x);
+		y = rotate(y, S);
+		newz = x ^ shift(z, 1) ^ shift(y & z, 2);
+		newy = y ^ x ^ shift(x | z, 1);
+		x = z ^ y ^ shift(x & y, 3);
+		y = newy;
+		z = newz;
+
+		x = _mm_shuffle_epi32(x, _MM_SHUFFLE(2, 3, 0, 1));
+		x ^= ((const __m128i*) (const void*) coeffs)[round];
+
+		x = rotate24(x);
+		y = rotate(y, S);
+		newz = x ^ shift(z, 1) ^ shift(y & z, 2);
+		newy = y ^ x ^ shift(x | z, 1);
+		x = z ^ y ^ shift(x & y, 3);
+		y = newy;
+		z = newz;
+
+		x = rotate24(x);
+		y = rotate(y, S);
+		newz = x ^ shift(z, 1) ^ shift(y & z, 2);
+		newy = y ^ x ^ shift(x | z, 1);
+		x = z ^ y ^ shift(x & y, 3);
+		y = newy;
+		z = newz;
+
+		x = _mm_shuffle_epi32(x, _MM_SHUFFLE(1, 0, 3, 2));
+
+		x = rotate24(x);
+		y = rotate(y, S);
+		newz = x ^ shift(z, 1) ^ shift(y & z, 2);
+		newy = y ^ x ^ shift(x | z, 1);
+		x = z ^ y ^ shift(x & y, 3);
+		y = newy;
+		z = newz;
 	}
 
-	static inline __m128i
-	rotate(__m128i x, int bits)
-	{
-		return _mm_slli_epi32(x, bits) | _mm_srli_epi32(x, 32 - bits);
-	}
-
-	#ifdef __SSSE3__
-	static inline __m128i
-	rotate24(__m128i x)
-	{
-		return _mm_shuffle_epi8(x, _mm_set_epi8(12, 15, 14, 13, 8, 11, 10, 9, 4, 7, 6, 5, 0, 3, 2, 1));
-	}
-	#else
-	static inline __m128i
-	rotate24(__m128i x)
-	{
-		uint8_t _hydro_attr_aligned_(16) x8[16], y8[16];
-
-		_mm_storeu_si128((__m128i *) (void *) x8, x);
-
-		y8[ 0] = x8[ 1]; y8[ 1] = x8[ 2]; y8[ 2] = x8[ 3]; y8[ 3] = x8[ 0];
-		y8[ 4] = x8[ 5]; y8[ 5] = x8[ 6]; y8[ 6] = x8[ 7]; y8[ 7] = x8[ 4];
-		y8[ 8] = x8[ 9]; y8[ 9] = x8[10]; y8[10] = x8[11]; y8[11] = x8[ 8];
-		y8[12] = x8[13]; y8[13] = x8[14]; y8[14] = x8[15]; y8[15] = x8[12];
-
-		return _mm_loadu_si128((const __m128i *) (const void *) y8);
-	}
-	#endif
-
-	static const uint32_t coeffs[24] _hydro_attr_aligned_(16) = {
-		0x9e377904, 0, 0, 0, 0x9e377908, 0, 0, 0, 0x9e37790c, 0, 0, 0,
-		0x9e377910, 0, 0, 0, 0x9e377914, 0, 0, 0, 0x9e377918, 0, 0, 0,
-	};
-
-	static void
-	gimli_core(uint32_t state[gimli_BLOCKBYTES / 4])
-	{
-		__m128i x = _mm_loadu_si128((const __m128i *) (const void *) &state[0]);
-		__m128i y = _mm_loadu_si128((const __m128i *) (const void *) &state[4]);
-		__m128i z = _mm_loadu_si128((const __m128i *) (const void *) &state[8]);
-		__m128i newy;
-		__m128i newz;
-		int     round;
-
-		for (round = 5; round >= 0; round--) {
-			x    = rotate24(x);
-			y    = rotate(y, S);
-			newz = x ^ shift(z, 1) ^ shift(y & z, 2);
-			newy = y ^ x ^ shift(x | z, 1);
-			x    = z ^ y ^ shift(x & y, 3);
-			y    = newy;
-			z    = newz;
-
-			x = _mm_shuffle_epi32(x, _MM_SHUFFLE(2, 3, 0, 1));
-			x ^= ((const __m128i *) (const void *) coeffs)[round];
-
-			x    = rotate24(x);
-			y    = rotate(y, S);
-			newz = x ^ shift(z, 1) ^ shift(y & z, 2);
-			newy = y ^ x ^ shift(x | z, 1);
-			x    = z ^ y ^ shift(x & y, 3);
-			y    = newy;
-			z    = newz;
-
-			x    = rotate24(x);
-			y    = rotate(y, S);
-			newz = x ^ shift(z, 1) ^ shift(y & z, 2);
-			newy = y ^ x ^ shift(x | z, 1);
-			x    = z ^ y ^ shift(x & y, 3);
-			y    = newy;
-			z    = newz;
-
-			x = _mm_shuffle_epi32(x, _MM_SHUFFLE(1, 0, 3, 2));
-
-			x    = rotate24(x);
-			y    = rotate(y, S);
-			newz = x ^ shift(z, 1) ^ shift(y & z, 2);
-			newy = y ^ x ^ shift(x | z, 1);
-			x    = z ^ y ^ shift(x & y, 3);
-			y    = newy;
-			z    = newz;
-		}
-
-		_mm_storeu_si128((__m128i *) (void *) &state[0], x);
-		_mm_storeu_si128((__m128i *) (void *) &state[4], y);
-		_mm_storeu_si128((__m128i *) (void *) &state[8], z);
-	}
-
+	_mm_storeu_si128((__m128i*) (void*) & state[0], x);
+	_mm_storeu_si128((__m128i*) (void*) & state[4], y);
+	_mm_storeu_si128((__m128i*) (void*) & state[8], z);
+}
+#undef S
 #else
 
-	static void
-	gimli_core(uint32_t state[gimli_BLOCKBYTES / 4])
-	{
-		unsigned int round;
-		unsigned int column;
-		uint32_t     x;
-		uint32_t     y;
-		uint32_t     z;
+static void
+gimli_core(uint32_t state[gimli_BLOCKBYTES / 4]) {
+	unsigned int round;
+	unsigned int column;
+	uint32_t     x;
+	uint32_t     y;
+	uint32_t     z;
 
-		for (round = 24; round > 0; round--) {
-			for (column = 0; column < 4; column++) {
-				x = ROTL32(state[column], 24);
-				y = ROTL32(state[4 + column], 9);
-				z = state[8 + column];
+	for (round = 24; round > 0; round--) {
+		for (column = 0; column < 4; column++) {
+			x = ROTL32(state[column], 24);
+			y = ROTL32(state[4 + column], 9);
+			z = state[8 + column];
 
-				state[8 + column] = x ^ (z << 1) ^ ((y & z) << 2);
-				state[4 + column] = y ^ x ^ ((x | z) << 1);
-				state[column]     = z ^ y ^ ((x & y) << 3);
-			}
-			switch (round & 3) {
-			case 0:
-				x        = state[0];
-				state[0] = state[1];
-				state[1] = x;
-				x        = state[2];
-				state[2] = state[3];
-				state[3] = x;
-				state[0] ^= ((uint32_t) 0x9e377900 | round);
-				break;
-			case 2:
-				x        = state[0];
-				state[0] = state[2];
-				state[2] = x;
-				x        = state[1];
-				state[1] = state[3];
-				state[3] = x;
-			}
+			state[8 + column] = x ^ (z << 1) ^ ((y & z) << 2);
+			state[4 + column] = y ^ x ^ ((x | z) << 1);
+			state[column] = z ^ y ^ ((x & y) << 3);
+		}
+		switch (round & 3) {
+		case 0:
+			x = state[0];
+			state[0] = state[1];
+			state[1] = x;
+			x = state[2];
+			state[2] = state[3];
+			state[3] = x;
+			state[0] ^= ((uint32_t)0x9e377900 | round);
+			break;
+		case 2:
+			x = state[0];
+			state[0] = state[2];
+			state[2] = x;
+			x = state[1];
+			state[1] = state[3];
+			state[3] = x;
 		}
 	}
+}
 
 #endif
 
 static void
-gimli_core_u8(uint8_t state_u8[gimli_BLOCKBYTES], uint8_t tag)
-{
+gimli_core_u8(uint8_t state_u8[gimli_BLOCKBYTES], uint8_t tag) {
 	state_u8[gimli_BLOCKBYTES - 1] ^= tag;
 #ifndef NATIVE_LITTLE_ENDIAN
 	uint32_t state_u32[12];
@@ -1675,7 +1608,7 @@ gimli_core_u8(uint8_t state_u8[gimli_BLOCKBYTES], uint8_t tag)
 		STORE32_LE(&state_u8[i * 4], state_u32[i]);
 	}
 #else
-	gimli_core((uint32_t *) (void *) state_u8); /* state_u8 must be properly aligned */
+	gimli_core((uint32_t*)(void*)state_u8); /* state_u8 must be properly aligned */
 #endif
 }
 
@@ -1689,368 +1622,355 @@ static TLS struct {
 
 #if defined(AVR) && !defined(__unix__)
 
-	#include <Arduino.h>
+#include <Arduino.h>
 
-	static bool
-	hydro_random_rbit(uint16_t x)
-	{
-		uint8_t x8;
+static bool
+hydro_random_rbit(uint16_t x) {
+	uint8_t x8;
 
-		x8 = ((uint8_t)(x >> 8)) ^ (uint8_t) x;
-		x8 = (x8 >> 4) ^ (x8 & 0xf);
-		x8 = (x8 >> 2) ^ (x8 & 0x3);
-		x8 = (x8 >> 1) ^ x8;
+	x8 = ((uint8_t)(x >> 8)) ^ (uint8_t)x;
+	x8 = (x8 >> 4) ^ (x8 & 0xf);
+	x8 = (x8 >> 2) ^ (x8 & 0x3);
+	x8 = (x8 >> 1) ^ x8;
 
-		return (bool) (x8 & 1);
-	}
+	return (bool)(x8 & 1);
+}
 
-	static int
-	hydro_random_init(void)
-	{
-		const char       ctx[hydro_hash_CONTEXTBYTES] = { 'h', 'y', 'd', 'r', 'o', 'P', 'R', 'G' };
-		hydro_hash_state st;
-		uint16_t         ebits = 0;
-		uint16_t         tc;
-		bool             a, b;
+static int
+hydro_random_init(void) {
+	const char       ctx[hydro_hash_CONTEXTBYTES] = { 'h', 'y', 'd', 'r', 'o', 'P', 'R', 'G' };
+	hydro_hash_state st;
+	uint16_t         ebits = 0;
+	uint16_t         tc;
+	bool             a, b;
 
-		cli();
-		MCUSR = 0;
-		WDTCSR |= _BV(WDCE) | _BV(WDE);
-		WDTCSR = _BV(WDIE);
-		sei();
+	cli();
+	MCUSR = 0;
+	WDTCSR |= _BV(WDCE) | _BV(WDE);
+	WDTCSR = _BV(WDIE);
+	sei();
 
-		hydro_hash_init(&st, ctx, NULL);
+	hydro_hash_init(&st, ctx, NULL);
 
-		while (ebits < 256) {
-			delay(1);
-			tc = TCNT1;
-			hydro_hash_update(&st, (const uint8_t *) &tc, sizeof tc);
-			a = hydro_random_rbit(tc);
-			delay(1);
-			tc = TCNT1;
-			b  = hydro_random_rbit(tc);
-			hydro_hash_update(&st, (const uint8_t *) &tc, sizeof tc);
-			if (a == b) {
-				continue;
-			}
-			hydro_hash_update(&st, (const uint8_t *) &b, sizeof b);
-			ebits++;
+	while (ebits < 256) {
+		delay(1);
+		tc = TCNT1;
+		hydro_hash_update(&st, (const uint8_t*)&tc, sizeof tc);
+		a = hydro_random_rbit(tc);
+		delay(1);
+		tc = TCNT1;
+		b = hydro_random_rbit(tc);
+		hydro_hash_update(&st, (const uint8_t*)&tc, sizeof tc);
+		if (a == b) {
+			continue;
 		}
-
-		cli();
-		MCUSR = 0;
-		WDTCSR |= _BV(WDCE) | _BV(WDE);
-		WDTCSR = 0;
-		sei();
-
-		hydro_hash_final(&st, hydro_random_context.state, sizeof hydro_random_context.state);
-		hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
-
-		return 0;
+		hydro_hash_update(&st, (const uint8_t*)&b, sizeof b);
+		ebits++;
 	}
 
-	ISR(WDT_vect) {}
+	cli();
+	MCUSR = 0;
+	WDTCSR |= _BV(WDCE) | _BV(WDE);
+	WDTCSR = 0;
+	sei();
+
+	hydro_hash_final(&st, hydro_random_context.state, sizeof hydro_random_context.state);
+	hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
+
+	return 0;
+}
+
+ISR(WDT_vect) {}
 
 #elif (defined(ESP32) || defined(ESP8266)) && !defined(__unix__)
 
-	// Important: RF *must* be activated on ESP board
-	// https://techtutorialsx.com/2017/12/22/esp32-arduino-random-number-generation/
-	#ifdef ESP32
-	# include <esp_system.h>
-	#endif
+// Important: RF *must* be activated on ESP board
+// https://techtutorialsx.com/2017/12/22/esp32-arduino-random-number-generation/
+#ifdef ESP32
+# include <esp_system.h>
+#endif
 
-	static int
-	hydro_random_init(void)
-	{
-		const char       ctx[hydro_hash_CONTEXTBYTES] = { 'h', 'y', 'd', 'r', 'o', 'P', 'R', 'G' };
-		hydro_hash_state st;
-		uint16_t         ebits = 0;
+static int
+hydro_random_init(void) {
+	const char       ctx[hydro_hash_CONTEXTBYTES] = { 'h', 'y', 'd', 'r', 'o', 'P', 'R', 'G' };
+	hydro_hash_state st;
+	uint16_t         ebits = 0;
 
-		hydro_hash_init(&st, ctx, NULL);
+	hydro_hash_init(&st, ctx, NULL);
 
-		while (ebits < 256) {
-			uint32_t r = esp_random();
+	while (ebits < 256) {
+		uint32_t r = esp_random();
 
-			delay(10);
-			hydro_hash_update(&st, (const uint32_t *) &r, sizeof r);
-			ebits += 32;
-		}
-
-		hydro_hash_final(&st, hydro_random_context.state, sizeof hydro_random_context.state);
-		hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
-
-		return 0;
+		delay(10);
+		hydro_hash_update(&st, (const uint32_t*)&r, sizeof r);
+		ebits += 32;
 	}
+
+	hydro_hash_final(&st, hydro_random_context.state, sizeof hydro_random_context.state);
+	hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
+
+	return 0;
+}
 
 #elif defined(PARTICLE) && defined(PLATFORM_ID) && PLATFORM_ID > 2 && !defined(__unix__)
 
-	// Note: All particle platforms except for the Spark Core have a HW RNG.  Only allow building on
-	// supported platforms for now. PLATFORM_ID definitions:
-	// https://github.com/particle-iot/device-os/blob/mesh-develop/hal/shared/platforms.h
+// Note: All particle platforms except for the Spark Core have a HW RNG.  Only allow building on
+// supported platforms for now. PLATFORM_ID definitions:
+// https://github.com/particle-iot/device-os/blob/mesh-develop/hal/shared/platforms.h
 
-	#include <Particle.h>
+#include <Particle.h>
 
-	static int
-	hydro_random_init(void)
-	{
-		const char       ctx[hydro_hash_CONTEXTBYTES] = { 'h', 'y', 'd', 'r', 'o', 'P', 'R', 'G' };
-		hydro_hash_state st;
-		uint16_t         ebits = 0;
+static int
+hydro_random_init(void) {
+	const char       ctx[hydro_hash_CONTEXTBYTES] = { 'h', 'y', 'd', 'r', 'o', 'P', 'R', 'G' };
+	hydro_hash_state st;
+	uint16_t         ebits = 0;
 
-		hydro_hash_init(&st, ctx, NULL);
+	hydro_hash_init(&st, ctx, NULL);
 
-		while (ebits < 256) {
-			uint32_t r = HAL_RNG_GetRandomNumber();
-			hydro_hash_update(&st, (const uint32_t *) &r, sizeof r);
-			ebits += 32;
-		}
-
-		hydro_hash_final(&st, hydro_random_context.state, sizeof hydro_random_context.state);
-		hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
-
-		return 0;
+	while (ebits < 256) {
+		uint32_t r = HAL_RNG_GetRandomNumber();
+		hydro_hash_update(&st, (const uint32_t*)&r, sizeof r);
+		ebits += 32;
 	}
+
+	hydro_hash_final(&st, hydro_random_context.state, sizeof hydro_random_context.state);
+	hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
+
+	return 0;
+}
 
 #elif (defined(NRF52832_XXAA) || defined(NRF52832_XXAB)) && !defined(__unix__)
 
-	// Important: The SoftDevice *must* be activated to enable reading from the RNG
-	// http://infocenter.nordicsemi.com/index.jsp?topic=%2Fcom.nordic.infocenter.nrf52832.ps.v1.1%2Frng.html
+// Important: The SoftDevice *must* be activated to enable reading from the RNG
+// http://infocenter.nordicsemi.com/index.jsp?topic=%2Fcom.nordic.infocenter.nrf52832.ps.v1.1%2Frng.html
 
-	#include <nrf_soc.h>
+#include <nrf_soc.h>
 
-	static int
-	hydro_random_init(void)
-	{
-		const char       ctx[hydro_hash_CONTEXTBYTES] = { 'h', 'y', 'd', 'r', 'o', 'P', 'R', 'G' };
-		hydro_hash_state st;
-		const uint8_t    total_bytes     = 32;
-		uint8_t          remaining_bytes = total_bytes;
-		uint8_t          available_bytes;
-		uint8_t          rand_buffer[32];
+static int
+hydro_random_init(void) {
+	const char       ctx[hydro_hash_CONTEXTBYTES] = { 'h', 'y', 'd', 'r', 'o', 'P', 'R', 'G' };
+	hydro_hash_state st;
+	const uint8_t    total_bytes = 32;
+	uint8_t          remaining_bytes = total_bytes;
+	uint8_t          available_bytes;
+	uint8_t          rand_buffer[32];
 
-		hydro_hash_init(&st, ctx, NULL);
+	hydro_hash_init(&st, ctx, NULL);
 
-		for (;;) {
-			if (sd_rand_application_bytes_available_get(&available_bytes) != NRF_SUCCESS) {
+	for (;;) {
+		if (sd_rand_application_bytes_available_get(&available_bytes) != NRF_SUCCESS) {
+			return -1;
+		}
+		if (available_bytes > 0) {
+			if (available_bytes > remaining_bytes) {
+				available_bytes = remaining_bytes;
+			}
+			if (sd_rand_application_vector_get(rand_buffer, available_bytes) != NRF_SUCCESS) {
 				return -1;
 			}
-			if (available_bytes > 0) {
-				if (available_bytes > remaining_bytes) {
-					available_bytes = remaining_bytes;
-				}
-				if (sd_rand_application_vector_get(rand_buffer, available_bytes) != NRF_SUCCESS) {
-					return -1;
-				}
-				hydro_hash_update(&st, rand_buffer, total_bytes);
-				remaining_bytes -= available_bytes;
-			}
-			if (remaining_bytes <= 0) {
-				break;
-			}
-			delay(10);
+			hydro_hash_update(&st, rand_buffer, total_bytes);
+			remaining_bytes -= available_bytes;
 		}
-		hydro_hash_final(&st, hydro_random_context.state, sizeof hydro_random_context.state);
-		hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
-
-		return 0;
+		if (remaining_bytes <= 0) {
+			break;
+		}
+		delay(10);
 	}
+	hydro_hash_final(&st, hydro_random_context.state, sizeof hydro_random_context.state);
+	hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
+
+	return 0;
+}
 
 #elif defined(_WIN32)
 
-	#define WIN32_LEAN_AND_MEAN
-	#include <windows.h>
-	#define RtlGenRandom SystemFunction036
-	#if defined(__cplusplus)
-	extern "C"
-	#endif
-		BOOLEAN NTAPI
-		RtlGenRandom(PVOID RandomBuffer, ULONG RandomBufferLength);
-	#pragma comment(lib, "advapi32.lib")
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#define RtlGenRandom SystemFunction036
+#if defined(__cplusplus)
+extern "C"
+#endif
+BOOLEAN NTAPI
+RtlGenRandom(PVOID RandomBuffer, ULONG RandomBufferLength);
+#pragma comment(lib, "advapi32.lib")
 
-	static int
-	hydro_random_init(void)
-	{
-		if (!RtlGenRandom((PVOID) hydro_random_context.state,
-						  (ULONG) sizeof hydro_random_context.state)) {
-			return -1;
-		}
-		hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
-
-		return 0;
+static int
+hydro_random_init(void) {
+	if (!RtlGenRandom((PVOID)hydro_random_context.state,
+		(ULONG)sizeof hydro_random_context.state)) {
+		return -1;
 	}
+	hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
+
+	return 0;
+}
 
 #elif defined(__wasi__)
 
-	#include <unistd.h>
+#include <unistd.h>
 
-	static int
-	hydro_random_init(void)
-	{
-		if (getentropy(hydro_random_context.state, sizeof hydro_random_context.state) != 0) {
-			return -1;
-		}
-		hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
-
-		return 0;
+static int
+hydro_random_init(void) {
+	if (getentropy(hydro_random_context.state, sizeof hydro_random_context.state) != 0) {
+		return -1;
 	}
+	hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
+
+	return 0;
+}
 
 #elif defined(__unix__)
 
-	#include <errno.h>
-	#include <fcntl.h>
-	#ifdef __linux__
-	#include <poll.h>
-	#endif
-	#include <sys/types.h>
-	#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+#ifdef __linux__
+#include <poll.h>
+#endif
+#include <sys/types.h>
+#include <unistd.h>
 
-	#ifdef __linux__
-	static int
-	hydro_random_block_on_dev_random(void)
-	{
-		struct pollfd pfd;
-		int           fd;
-		int           pret;
+#ifdef __linux__
+static int
+hydro_random_block_on_dev_random(void) {
+	struct pollfd pfd;
+	int           fd;
+	int           pret;
 
-		fd = open("/dev/random", O_RDONLY);
-		if (fd == -1) {
-			return 0;
+	fd = open("/dev/random", O_RDONLY);
+	if (fd == -1) {
+		return 0;
+	}
+	pfd.fd = fd;
+	pfd.events = POLLIN;
+	pfd.revents = 0;
+	do {
+		pret = poll(&pfd, 1, -1);
+	} while (pret < 0 && (errno == EINTR || errno == EAGAIN));
+	if (pret != 1) {
+		(void)close(fd);
+		errno = EIO;
+		return -1;
+	}
+	return close(fd);
+}
+#endif
+
+static ssize_t
+hydro_random_safe_read(const int fd, void* const buf_, size_t len) {
+	unsigned char* buf = (unsigned char*)buf_;
+	ssize_t        readnb;
+
+	do {
+		while ((readnb = read(fd, buf, len)) < (ssize_t)0 && (errno == EINTR || errno == EAGAIN)) {
 		}
-		pfd.fd      = fd;
-		pfd.events  = POLLIN;
-		pfd.revents = 0;
-		do {
-			pret = poll(&pfd, 1, -1);
-		} while (pret < 0 && (errno == EINTR || errno == EAGAIN));
-		if (pret != 1) {
-			(void) close(fd);
-			errno = EIO;
+		if (readnb < (ssize_t)0) {
+			return readnb;
+		}
+		if (readnb == (ssize_t)0) {
+			break;
+		}
+		len -= (size_t)readnb;
+		buf += readnb;
+	} while (len > (ssize_t) 0);
+
+	return (ssize_t)(buf - (unsigned char*)buf_);
+}
+
+static int
+hydro_random_init(void) {
+	uint8_t tmp[gimli_BLOCKBYTES + 8];
+	int     fd;
+	int     ret = -1;
+
+#ifdef __linux__
+	if (hydro_random_block_on_dev_random() != 0) {
+		return -1;
+	}
+#endif
+	do {
+		fd = open("/dev/urandom", O_RDONLY);
+		if (fd == -1 && errno != EINTR) {
 			return -1;
 		}
-		return close(fd);
+	} while (fd == -1);
+	if (hydro_random_safe_read(fd, tmp, sizeof tmp) == (ssize_t)sizeof tmp) {
+		memcpy(hydro_random_context.state, tmp, gimli_BLOCKBYTES);
+		memcpy(&hydro_random_context.counter, tmp + gimli_BLOCKBYTES, 8);
+		hydro_memzero(tmp, sizeof tmp);
+		ret = 0;
 	}
-	#endif
+	ret |= close(fd);
 
-	static ssize_t
-	hydro_random_safe_read(const int fd, void *const buf_, size_t len)
-	{
-		unsigned char *buf = (unsigned char *) buf_;
-		ssize_t        readnb;
-
-		do {
-			while ((readnb = read(fd, buf, len)) < (ssize_t) 0 && (errno == EINTR || errno == EAGAIN)) {
-			}
-			if (readnb < (ssize_t) 0) {
-				return readnb;
-			}
-			if (readnb == (ssize_t) 0) {
-				break;
-			}
-			len -= (size_t) readnb;
-			buf += readnb;
-		} while (len > (ssize_t) 0);
-
-		return (ssize_t)(buf - (unsigned char *) buf_);
-	}
-
-	static int
-	hydro_random_init(void)
-	{
-		uint8_t tmp[gimli_BLOCKBYTES + 8];
-		int     fd;
-		int     ret = -1;
-
-	#ifdef __linux__
-		if (hydro_random_block_on_dev_random() != 0) {
-			return -1;
-		}
-	#endif
-		do {
-			fd = open("/dev/urandom", O_RDONLY);
-			if (fd == -1 && errno != EINTR) {
-				return -1;
-			}
-		} while (fd == -1);
-		if (hydro_random_safe_read(fd, tmp, sizeof tmp) == (ssize_t) sizeof tmp) {
-			memcpy(hydro_random_context.state, tmp, gimli_BLOCKBYTES);
-			memcpy(&hydro_random_context.counter, tmp + gimli_BLOCKBYTES, 8);
-			hydro_memzero(tmp, sizeof tmp);
-			ret = 0;
-		}
-		ret |= close(fd);
-
-		return ret;
-	}
+	return ret;
+}
 
 #elif defined(TARGET_LIKE_MBED)
 
-	#include <mbedtls/ctr_drbg.h>
-	#include <mbedtls/entropy.h>
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/entropy.h>
 
-	#if defined(MBEDTLS_ENTROPY_C)
+#if defined(MBEDTLS_ENTROPY_C)
 
-	static int
-	hydro_random_init(void)
-	{
-		mbedtls_entropy_context entropy;
-		uint16_t                pos = 0;
+static int
+hydro_random_init(void) {
+	mbedtls_entropy_context entropy;
+	uint16_t                pos = 0;
 
-		mbedtls_entropy_init(&entropy);
+	mbedtls_entropy_init(&entropy);
 
-		// Pull data directly out of the entropy pool for the state, as it's small enough.
-		if (mbedtls_entropy_func(&entropy, (uint8_t *) &hydro_random_context.counter,
-								 sizeof hydro_random_context.counter) != 0) {
+	// Pull data directly out of the entropy pool for the state, as it's small enough.
+	if (mbedtls_entropy_func(&entropy, (uint8_t*)&hydro_random_context.counter,
+		sizeof hydro_random_context.counter) != 0) {
+		return -1;
+	}
+	// mbedtls_entropy_func can't provide more than MBEDTLS_ENTROPY_BLOCK_SIZE in one go.
+	// This constant depends of mbedTLS configuration (whether the PRNG is backed by SHA256/SHA512
+	// at this time) Therefore, if necessary, we get entropy multiple times.
+
+	do {
+		const uint8_t dataLeftToConsume = gimli_BLOCKBYTES - pos;
+		const uint8_t currentChunkSize = (dataLeftToConsume > MBEDTLS_ENTROPY_BLOCK_SIZE)
+			? MBEDTLS_ENTROPY_BLOCK_SIZE
+			: dataLeftToConsume;
+
+		// Forces mbedTLS to fetch fresh entropy, then get some to feed libhydrogen.
+		if (mbedtls_entropy_gather(&entropy) != 0 ||
+			mbedtls_entropy_func(&entropy, &hydro_random_context.state[pos], currentChunkSize) !=
+			0) {
 			return -1;
 		}
-		// mbedtls_entropy_func can't provide more than MBEDTLS_ENTROPY_BLOCK_SIZE in one go.
-		// This constant depends of mbedTLS configuration (whether the PRNG is backed by SHA256/SHA512
-		// at this time) Therefore, if necessary, we get entropy multiple times.
+		pos += MBEDTLS_ENTROPY_BLOCK_SIZE;
+	} while (pos < gimli_BLOCKBYTES);
 
-		do {
-			const uint8_t dataLeftToConsume = gimli_BLOCKBYTES - pos;
-			const uint8_t currentChunkSize  = (dataLeftToConsume > MBEDTLS_ENTROPY_BLOCK_SIZE)
-												 ? MBEDTLS_ENTROPY_BLOCK_SIZE
-												 : dataLeftToConsume;
+	mbedtls_entropy_free(&entropy);
 
-			// Forces mbedTLS to fetch fresh entropy, then get some to feed libhydrogen.
-			if (mbedtls_entropy_gather(&entropy) != 0 ||
-				mbedtls_entropy_func(&entropy, &hydro_random_context.state[pos], currentChunkSize) !=
-					0) {
-				return -1;
-			}
-			pos += MBEDTLS_ENTROPY_BLOCK_SIZE;
-		} while (pos < gimli_BLOCKBYTES);
-
-		mbedtls_entropy_free(&entropy);
-
-		return 0;
-	}
-	#else
-	# error Need an entropy source
-	#endif
+	return 0;
+}
+#else
+# error Need an entropy source
+#endif
 
 #elif defined(RIOT_VERSION)
 
-	#include <random.h>
+#include <random.h>
 
-	static int
-	hydro_random_init(void)
-	{
-		random_bytes(hydro_random_context.state, sizeof(hydro_random_context.state));
-		hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
+static int
+hydro_random_init(void) {
+	random_bytes(hydro_random_context.state, sizeof(hydro_random_context.state));
+	hydro_random_context.counter = ~LOAD64_LE(hydro_random_context.state);
 
-		return 0;
-	}
+	return 0;
+}
 
 #else
 
-	#error Unsupported platform (libhydrogen).
+#error Unsupported platform (libhydrogen).
 
 #endif
 
 static void
-hydro_random_check_initialized(void)
-{
+hydro_random_check_initialized(void) {
 	if (hydro_random_context.initialized == 0) {
 		if (hydro_random_init() != 0) {
 			abort();
@@ -2062,8 +1982,7 @@ hydro_random_check_initialized(void)
 }
 
 void
-hydro_random_ratchet(void)
-{
+hydro_random_ratchet(void) {
 	mem_zero(hydro_random_context.state, gimli_RATE);
 	STORE64_LE(hydro_random_context.state, hydro_random_context.counter);
 	hydro_random_context.counter++;
@@ -2072,8 +1991,7 @@ hydro_random_ratchet(void)
 }
 
 uint32_t
-hydro_random_u32(void)
-{
+hydro_random_u32(void) {
 	uint32_t v;
 
 	hydro_random_check_initialized();
@@ -2087,8 +2005,7 @@ hydro_random_u32(void)
 }
 
 uint32_t
-hydro_random_uniform(const uint32_t upper_bound)
-{
+hydro_random_uniform(const uint32_t upper_bound) {
 	uint32_t min;
 	uint32_t r;
 
@@ -2106,9 +2023,8 @@ hydro_random_uniform(const uint32_t upper_bound)
 }
 
 void
-hydro_random_buf(void *out, size_t out_len)
-{
-	uint8_t *p = (uint8_t *) out;
+hydro_random_buf(void* out, size_t out_len) {
+	uint8_t* p = (uint8_t*)out;
 	size_t   i;
 	size_t   leftover;
 
@@ -2126,19 +2042,18 @@ hydro_random_buf(void *out, size_t out_len)
 }
 
 void
-hydro_random_buf_deterministic(void *out, size_t out_len,
-							   const uint8_t seed[hydro_random_SEEDBYTES])
-{
+hydro_random_buf_deterministic(void* out, size_t out_len,
+	const uint8_t seed[hydro_random_SEEDBYTES]) {
 	static const uint8_t             prefix[] = { 7, 'd', 'r', 'b', 'g', '2', '5', '6' };
 	_hydro_attr_aligned_(16) uint8_t state[gimli_BLOCKBYTES];
-	uint8_t *                        p = (uint8_t *) out;
+	uint8_t* p = (uint8_t*)out;
 	size_t                           i;
 	size_t                           leftover;
 
 	mem_zero(state, gimli_BLOCKBYTES);
 	COMPILER_ASSERT(sizeof prefix + 8 <= gimli_RATE);
 	memcpy(state, prefix, sizeof prefix);
-	STORE64_LE(state + sizeof prefix, (uint64_t) out_len);
+	STORE64_LE(state + sizeof prefix, (uint64_t)out_len);
 	gimli_core_u8(state, 1);
 	COMPILER_ASSERT(hydro_random_SEEDBYTES == gimli_RATE * 2);
 	mem_xor(state, seed, gimli_RATE);
@@ -2157,18 +2072,16 @@ hydro_random_buf_deterministic(void *out, size_t out_len,
 }
 
 void
-hydro_random_reseed(void)
-{
+hydro_random_reseed(void) {
 	hydro_random_context.initialized = 0;
 	hydro_random_check_initialized();
 }
 
 
 int
-hydro_hash_update(hydro_hash_state *state, const void *in_, size_t in_len)
-{
-	const uint8_t *in  = (const uint8_t *) in_;
-	uint8_t *      buf = (uint8_t *) (void *) state->state;
+hydro_hash_update(hydro_hash_state* state, const void* in_, size_t in_len) {
+	const uint8_t* in = (const uint8_t*)in_;
+	uint8_t* buf = (uint8_t*)(void*)state->state;
 	size_t         left;
 	size_t         ps;
 	size_t         i;
@@ -2183,7 +2096,7 @@ hydro_hash_update(hydro_hash_state *state, const void *in_, size_t in_len)
 		}
 		in += ps;
 		in_len -= ps;
-		state->buf_off += (uint8_t) ps;
+		state->buf_off += (uint8_t)ps;
 		if (state->buf_off == gimli_RATE) {
 			gimli_core_u8(buf, 0);
 			state->buf_off = 0;
@@ -2196,9 +2109,8 @@ hydro_hash_update(hydro_hash_state *state, const void *in_, size_t in_len)
    msg || right_enc(msg_len) || 0x00 */
 
 int
-hydro_hash_init(hydro_hash_state *state, const char ctx[hydro_hash_CONTEXTBYTES],
-				const uint8_t key[hydro_hash_KEYBYTES])
-{
+hydro_hash_init(hydro_hash_state* state, const char ctx[hydro_hash_CONTEXTBYTES],
+	const uint8_t key[hydro_hash_KEYBYTES]) {
 	uint8_t block[64] = { 4, 'k', 'm', 'a', 'c', 8 };
 	size_t  p;
 
@@ -2207,14 +2119,14 @@ hydro_hash_init(hydro_hash_state *state, const char ctx[hydro_hash_CONTEXTBYTES]
 	mem_zero(block + 14, sizeof block - 14);
 	memcpy(block + 6, ctx, 8);
 	if (key != NULL) {
-		block[gimli_RATE] = (uint8_t) hydro_hash_KEYBYTES;
+		block[gimli_RATE] = (uint8_t)hydro_hash_KEYBYTES;
 		memcpy(block + gimli_RATE + 1, key, hydro_hash_KEYBYTES);
 		p = (gimli_RATE + 1 + hydro_hash_KEYBYTES + (gimli_RATE - 1)) & ~(size_t)(gimli_RATE - 1);
 	} else {
-		block[gimli_RATE] = (uint8_t) 0;
-		p                 = (gimli_RATE + 1 + 0 + (gimli_RATE - 1)) & ~(size_t)(gimli_RATE - 1);
+		block[gimli_RATE] = (uint8_t)0;
+		p = (gimli_RATE + 1 + 0 + (gimli_RATE - 1)) & ~(size_t)(gimli_RATE - 1);
 	}
-	mem_zero(state, sizeof *state);
+	mem_zero(state, sizeof * state);
 	hydro_hash_update(state, block, p);
 
 	return 0;
@@ -2224,9 +2136,8 @@ hydro_hash_init(hydro_hash_state *state, const char ctx[hydro_hash_CONTEXTBYTES]
    pad(right_enc(tweak)) || msg || right_enc(msg_len) || 0x00 */
 
 static int
-hydro_hash_init_with_tweak(hydro_hash_state *state, const char ctx[hydro_hash_CONTEXTBYTES],
-						   uint64_t tweak, const uint8_t key[hydro_hash_KEYBYTES])
-{
+hydro_hash_init_with_tweak(hydro_hash_state* state, const char ctx[hydro_hash_CONTEXTBYTES],
+	uint64_t tweak, const uint8_t key[hydro_hash_KEYBYTES]) {
 	uint8_t block[80] = { 4, 't', 'm', 'a', 'c', 8 };
 	size_t  p;
 
@@ -2235,27 +2146,26 @@ hydro_hash_init_with_tweak(hydro_hash_state *state, const char ctx[hydro_hash_CO
 	mem_zero(block + 14, sizeof block - 14);
 	memcpy(block + 6, ctx, 8);
 	if (key != NULL) {
-		block[gimli_RATE] = (uint8_t) hydro_hash_KEYBYTES;
+		block[gimli_RATE] = (uint8_t)hydro_hash_KEYBYTES;
 		memcpy(block + gimli_RATE + 1, key, hydro_hash_KEYBYTES);
 		p = (gimli_RATE + 1 + hydro_hash_KEYBYTES + (gimli_RATE - 1)) & ~(size_t)(gimli_RATE - 1);
 	} else {
-		block[gimli_RATE] = (uint8_t) 0;
-		p                 = (gimli_RATE + 1 + 0 + (gimli_RATE - 1)) & ~(size_t)(gimli_RATE - 1);
+		block[gimli_RATE] = (uint8_t)0;
+		p = (gimli_RATE + 1 + 0 + (gimli_RATE - 1)) & ~(size_t)(gimli_RATE - 1);
 	}
-	block[p] = (uint8_t) sizeof tweak;
+	block[p] = (uint8_t)sizeof tweak;
 	STORE64_LE(&block[p + 1], tweak);
 	p += gimli_RATE;
-	mem_zero(state, sizeof *state);
+	mem_zero(state, sizeof * state);
 	hydro_hash_update(state, block, p);
 
 	return 0;
 }
 
 int
-hydro_hash_final(hydro_hash_state *state, uint8_t *out, size_t out_len)
-{
+hydro_hash_final(hydro_hash_state* state, uint8_t* out, size_t out_len) {
 	uint8_t  lc[4];
-	uint8_t *buf = (uint8_t *) (void *) state->state;
+	uint8_t* buf = (uint8_t*)(void*)state->state;
 	size_t   i;
 	size_t   lc_len;
 	size_t   leftover;
@@ -2264,11 +2174,11 @@ hydro_hash_final(hydro_hash_state *state, uint8_t *out, size_t out_len)
 		return -1;
 	}
 	COMPILER_ASSERT(hydro_hash_BYTES_MAX <= 0xffff);
-	lc[1]  = (uint8_t) out_len;
-	lc[2]  = (uint8_t)(out_len >> 8);
-	lc[3]  = 0;
+	lc[1] = (uint8_t)out_len;
+	lc[2] = (uint8_t)(out_len >> 8);
+	lc[3] = 0;
 	lc_len = (size_t)(1 + (lc[2] != 0));
-	lc[0]  = (uint8_t) lc_len;
+	lc[0] = (uint8_t)lc_len;
 	hydro_hash_update(state, lc, 1 + lc_len + 1);
 	gimli_pad_u8(buf, state->buf_off, gimli_DOMAIN_XOF);
 	for (i = 0; i < out_len / gimli_RATE; i++) {
@@ -2286,11 +2196,10 @@ hydro_hash_final(hydro_hash_state *state, uint8_t *out, size_t out_len)
 }
 
 int
-hydro_hash_hash(uint8_t *out, size_t out_len, const void *in_, size_t in_len,
-				const char ctx[hydro_hash_CONTEXTBYTES], const uint8_t key[hydro_hash_KEYBYTES])
-{
+hydro_hash_hash(uint8_t* out, size_t out_len, const void* in_, size_t in_len,
+	const char ctx[hydro_hash_CONTEXTBYTES], const uint8_t key[hydro_hash_KEYBYTES]) {
 	hydro_hash_state st;
-	const uint8_t *  in = (const uint8_t *) in_;
+	const uint8_t* in = (const uint8_t*)in_;
 
 	if (hydro_hash_init(&st, ctx, key) != 0 || hydro_hash_update(&st, in, in_len) != 0 ||
 		hydro_hash_final(&st, out, out_len) != 0) {
@@ -2300,17 +2209,15 @@ hydro_hash_hash(uint8_t *out, size_t out_len, const void *in_, size_t in_len,
 }
 
 void
-hydro_hash_keygen(uint8_t key[hydro_hash_KEYBYTES])
-{
+hydro_hash_keygen(uint8_t key[hydro_hash_KEYBYTES]) {
 	hydro_random_buf(key, hydro_hash_KEYBYTES);
 }
 
 
 int
-hydro_kdf_derive_from_key(uint8_t *subkey, size_t subkey_len, uint64_t subkey_id,
-						  const char    ctx[hydro_kdf_CONTEXTBYTES],
-						  const uint8_t key[hydro_kdf_KEYBYTES])
-{
+hydro_kdf_derive_from_key(uint8_t* subkey, size_t subkey_len, uint64_t subkey_id,
+	const char    ctx[hydro_kdf_CONTEXTBYTES],
+	const uint8_t key[hydro_kdf_KEYBYTES]) {
 	hydro_hash_state st;
 
 	COMPILER_ASSERT(hydro_kdf_CONTEXTBYTES >= hydro_hash_CONTEXTBYTES);
@@ -2322,8 +2229,7 @@ hydro_kdf_derive_from_key(uint8_t *subkey, size_t subkey_len, uint64_t subkey_id
 }
 
 void
-hydro_kdf_keygen(uint8_t key[hydro_kdf_KEYBYTES])
-{
+hydro_kdf_keygen(uint8_t key[hydro_kdf_KEYBYTES]) {
 	hydro_random_buf(key, hydro_kdf_KEYBYTES);
 }
 
@@ -2333,15 +2239,13 @@ hydro_kdf_keygen(uint8_t key[hydro_kdf_KEYBYTES])
 #define hydro_secretbox_MACBYTES 16
 
 void
-hydro_secretbox_keygen(uint8_t key[hydro_secretbox_KEYBYTES])
-{
+hydro_secretbox_keygen(uint8_t key[hydro_secretbox_KEYBYTES]) {
 	hydro_random_buf(key, hydro_secretbox_KEYBYTES);
 }
 
 static void
-hydro_secretbox_xor_enc(uint8_t buf[gimli_BLOCKBYTES], uint8_t *out, const uint8_t *in,
-						size_t inlen)
-{
+hydro_secretbox_xor_enc(uint8_t buf[gimli_BLOCKBYTES], uint8_t* out, const uint8_t* in,
+	size_t inlen) {
 	size_t i;
 	size_t leftover;
 
@@ -2360,9 +2264,8 @@ hydro_secretbox_xor_enc(uint8_t buf[gimli_BLOCKBYTES], uint8_t *out, const uint8
 }
 
 static void
-hydro_secretbox_xor_dec(uint8_t buf[gimli_BLOCKBYTES], uint8_t *out, const uint8_t *in,
-						size_t inlen)
-{
+hydro_secretbox_xor_dec(uint8_t buf[gimli_BLOCKBYTES], uint8_t* out, const uint8_t* in,
+	size_t inlen) {
 	size_t i;
 	size_t leftover;
 
@@ -2382,10 +2285,9 @@ hydro_secretbox_xor_dec(uint8_t buf[gimli_BLOCKBYTES], uint8_t *out, const uint8
 
 static void
 hydro_secretbox_setup(uint8_t buf[gimli_BLOCKBYTES], uint64_t msg_id,
-					  const char    ctx[hydro_secretbox_CONTEXTBYTES],
-					  const uint8_t key[hydro_secretbox_KEYBYTES],
-					  const uint8_t iv[hydro_secretbox_IVBYTES], uint8_t key_tag)
-{
+	const char    ctx[hydro_secretbox_CONTEXTBYTES],
+	const uint8_t key[hydro_secretbox_KEYBYTES],
+	const uint8_t iv[hydro_secretbox_IVBYTES], uint8_t key_tag) {
 	static const uint8_t prefix[] = { 6, 's', 'b', 'x', '2', '5', '6', 8 };
 	uint8_t              msg_id_le[8];
 
@@ -2415,8 +2317,7 @@ hydro_secretbox_setup(uint8_t buf[gimli_BLOCKBYTES], uint64_t msg_id,
 }
 
 static void
-hydro_secretbox_final(uint8_t *buf, const uint8_t key[hydro_secretbox_KEYBYTES], uint8_t tag)
-{
+hydro_secretbox_final(uint8_t* buf, const uint8_t key[hydro_secretbox_KEYBYTES], uint8_t tag) {
 	COMPILER_ASSERT(hydro_secretbox_KEYBYTES == gimli_CAPACITY);
 	mem_xor(buf + gimli_RATE, key, hydro_secretbox_KEYBYTES);
 	gimli_core_u8(buf, tag);
@@ -2425,17 +2326,16 @@ hydro_secretbox_final(uint8_t *buf, const uint8_t key[hydro_secretbox_KEYBYTES],
 }
 
 static int
-hydro_secretbox_encrypt_iv(uint8_t *c, const void *m_, size_t mlen, uint64_t msg_id,
-						   const char    ctx[hydro_secretbox_CONTEXTBYTES],
-						   const uint8_t key[hydro_secretbox_KEYBYTES],
-						   const uint8_t iv[hydro_secretbox_IVBYTES])
-{
+hydro_secretbox_encrypt_iv(uint8_t* c, const void* m_, size_t mlen, uint64_t msg_id,
+	const char    ctx[hydro_secretbox_CONTEXTBYTES],
+	const uint8_t key[hydro_secretbox_KEYBYTES],
+	const uint8_t iv[hydro_secretbox_IVBYTES]) {
 	_hydro_attr_aligned_(16) uint32_t state[gimli_BLOCKBYTES / 4];
-	uint8_t *                         buf = (uint8_t *) (void *) state;
-	const uint8_t *                   m   = (const uint8_t *) m_;
-	uint8_t *                         siv = &c[0];
-	uint8_t *                         mac = &c[hydro_secretbox_SIVBYTES];
-	uint8_t *                         ct  = &c[hydro_secretbox_SIVBYTES + hydro_secretbox_MACBYTES];
+	uint8_t* buf = (uint8_t*)(void*)state;
+	const uint8_t* m = (const uint8_t*)m_;
+	uint8_t* siv = &c[0];
+	uint8_t* mac = &c[hydro_secretbox_SIVBYTES];
+	uint8_t* ct = &c[hydro_secretbox_SIVBYTES + hydro_secretbox_MACBYTES];
 	size_t                            i;
 	size_t                            leftover;
 
@@ -2477,11 +2377,10 @@ hydro_secretbox_encrypt_iv(uint8_t *c, const void *m_, size_t mlen, uint64_t msg
 }
 
 void
-hydro_secretbox_probe_create(uint8_t probe[hydro_secretbox_PROBEBYTES], const uint8_t *c,
-							 size_t c_len, const char ctx[hydro_secretbox_CONTEXTBYTES],
-							 const uint8_t key[hydro_secretbox_KEYBYTES])
-{
-	const uint8_t *mac;
+hydro_secretbox_probe_create(uint8_t probe[hydro_secretbox_PROBEBYTES], const uint8_t* c,
+	size_t c_len, const char ctx[hydro_secretbox_CONTEXTBYTES],
+	const uint8_t key[hydro_secretbox_KEYBYTES]) {
+	const uint8_t* mac;
 
 	if (c_len < hydro_secretbox_HEADERBYTES) {
 		abort();
@@ -2493,19 +2392,18 @@ hydro_secretbox_probe_create(uint8_t probe[hydro_secretbox_PROBEBYTES], const ui
 }
 
 int
-hydro_secretbox_probe_verify(const uint8_t probe[hydro_secretbox_PROBEBYTES], const uint8_t *c,
-							 size_t c_len, const char ctx[hydro_secretbox_CONTEXTBYTES],
-							 const uint8_t key[hydro_secretbox_KEYBYTES])
-{
+hydro_secretbox_probe_verify(const uint8_t probe[hydro_secretbox_PROBEBYTES], const uint8_t* c,
+	size_t c_len, const char ctx[hydro_secretbox_CONTEXTBYTES],
+	const uint8_t key[hydro_secretbox_KEYBYTES]) {
 	uint8_t        computed_probe[hydro_secretbox_PROBEBYTES];
-	const uint8_t *mac;
+	const uint8_t* mac;
 
 	if (c_len < hydro_secretbox_HEADERBYTES) {
 		return -1;
 	}
 	mac = &c[hydro_secretbox_SIVBYTES];
 	hydro_hash_hash(computed_probe, hydro_secretbox_PROBEBYTES, mac, hydro_secretbox_MACBYTES, ctx,
-					key);
+		key);
 	if (hydro_equal(computed_probe, probe, hydro_secretbox_PROBEBYTES) == 1) {
 		return 0;
 	}
@@ -2514,10 +2412,9 @@ hydro_secretbox_probe_verify(const uint8_t probe[hydro_secretbox_PROBEBYTES], co
 }
 
 int
-hydro_secretbox_encrypt(uint8_t *c, const void *m_, size_t mlen, uint64_t msg_id,
-						const char    ctx[hydro_secretbox_CONTEXTBYTES],
-						const uint8_t key[hydro_secretbox_KEYBYTES])
-{
+hydro_secretbox_encrypt(uint8_t* c, const void* m_, size_t mlen, uint64_t msg_id,
+	const char    ctx[hydro_secretbox_CONTEXTBYTES],
+	const uint8_t key[hydro_secretbox_KEYBYTES]) {
 	uint8_t iv[hydro_secretbox_IVBYTES];
 
 	hydro_random_buf(iv, sizeof iv);
@@ -2526,17 +2423,16 @@ hydro_secretbox_encrypt(uint8_t *c, const void *m_, size_t mlen, uint64_t msg_id
 }
 
 int
-hydro_secretbox_decrypt(void *m_, const uint8_t *c, size_t clen, uint64_t msg_id,
-						const char    ctx[hydro_secretbox_CONTEXTBYTES],
-						const uint8_t key[hydro_secretbox_KEYBYTES])
-{
+hydro_secretbox_decrypt(void* m_, const uint8_t* c, size_t clen, uint64_t msg_id,
+	const char    ctx[hydro_secretbox_CONTEXTBYTES],
+	const uint8_t key[hydro_secretbox_KEYBYTES]) {
 	_hydro_attr_aligned_(16) uint32_t state[gimli_BLOCKBYTES / 4];
 	uint32_t                          pub_mac[hydro_secretbox_MACBYTES / 4];
-	uint8_t *                         buf = (uint8_t *) (void *) state;
-	const uint8_t *                   siv;
-	const uint8_t *                   mac;
-	const uint8_t *                   ct;
-	uint8_t *                         m = (uint8_t *) m_;
+	uint8_t* buf = (uint8_t*)(void*)state;
+	const uint8_t* siv;
+	const uint8_t* mac;
+	const uint8_t* ct;
+	uint8_t* m = (uint8_t*)m_;
 	size_t                            mlen;
 	uint32_t                          cv;
 
@@ -2545,7 +2441,7 @@ hydro_secretbox_decrypt(void *m_, const uint8_t *c, size_t clen, uint64_t msg_id
 	}
 	siv = &c[0];
 	mac = &c[hydro_secretbox_SIVBYTES];
-	ct  = &c[hydro_secretbox_SIVBYTES + hydro_secretbox_MACBYTES];
+	ct = &c[hydro_secretbox_SIVBYTES + hydro_secretbox_MACBYTES];
 
 	mlen = clen - hydro_secretbox_HEADERBYTES;
 	memcpy(pub_mac, mac, sizeof pub_mac);
@@ -2600,7 +2496,7 @@ typedef hydro_x25519_limb_t hydro_x25519_fe[hydro_x25519_NLIMBS];
 typedef hydro_x25519_limb_t hydro_x25519_scalar_t[hydro_x25519_NLIMBS];
 
 static const hydro_x25519_limb_t hydro_x25519_MONTGOMERY_FACTOR =
-	(hydro_x25519_limb_t) 0xd2b51da312547e1bull;
+(hydro_x25519_limb_t)0xd2b51da312547e1bull;
 
 static const hydro_x25519_scalar_t hydro_x25519_sc_p = { hydro_x25519_LIMB(0x5812631a5cf5d3ed),
 														 hydro_x25519_LIMB(0x14def9dea2f79cd6),
@@ -2617,41 +2513,37 @@ static const uint8_t hydro_x25519_BASE_POINT[hydro_x25519_BYTES] = { 9 };
 static const hydro_x25519_limb_t hydro_x25519_a24[1] = { 121665 };
 
 static inline hydro_x25519_limb_t
-hydro_x25519_umaal(hydro_x25519_limb_t *carry, hydro_x25519_limb_t acc, hydro_x25519_limb_t mand,
-				   hydro_x25519_limb_t mier)
-{
-	hydro_x25519_dlimb_t tmp = (hydro_x25519_dlimb_t) mand * mier + acc + *carry;
+hydro_x25519_umaal(hydro_x25519_limb_t* carry, hydro_x25519_limb_t acc, hydro_x25519_limb_t mand,
+	hydro_x25519_limb_t mier) {
+	hydro_x25519_dlimb_t tmp = (hydro_x25519_dlimb_t)mand * mier + acc + *carry;
 
 	*carry = tmp >> hydro_x25519_WBITS;
-	return (hydro_x25519_limb_t) tmp;
+	return (hydro_x25519_limb_t)tmp;
 }
 
 static inline hydro_x25519_limb_t
-hydro_x25519_adc(hydro_x25519_limb_t *carry, hydro_x25519_limb_t acc, hydro_x25519_limb_t mand)
-{
-	hydro_x25519_dlimb_t total = (hydro_x25519_dlimb_t) *carry + acc + mand;
+hydro_x25519_adc(hydro_x25519_limb_t* carry, hydro_x25519_limb_t acc, hydro_x25519_limb_t mand) {
+	hydro_x25519_dlimb_t total = (hydro_x25519_dlimb_t)*carry + acc + mand;
 
 	*carry = total >> hydro_x25519_WBITS;
-	return (hydro_x25519_limb_t) total;
+	return (hydro_x25519_limb_t)total;
 }
 
 static inline hydro_x25519_limb_t
-hydro_x25519_adc0(hydro_x25519_limb_t *carry, hydro_x25519_limb_t acc)
-{
-	hydro_x25519_dlimb_t total = (hydro_x25519_dlimb_t) *carry + acc;
+hydro_x25519_adc0(hydro_x25519_limb_t* carry, hydro_x25519_limb_t acc) {
+	hydro_x25519_dlimb_t total = (hydro_x25519_dlimb_t)*carry + acc;
 
 	*carry = total >> hydro_x25519_WBITS;
-	return (hydro_x25519_limb_t) total;
+	return (hydro_x25519_limb_t)total;
 }
 
 static void
-hydro_x25519_propagate(hydro_x25519_fe x, hydro_x25519_limb_t over)
-{
+hydro_x25519_propagate(hydro_x25519_fe x, hydro_x25519_limb_t over) {
 	hydro_x25519_limb_t carry;
 	int                 i;
 
 	over = x[hydro_x25519_NLIMBS - 1] >> (hydro_x25519_WBITS - 1) | over << 1;
-	x[hydro_x25519_NLIMBS - 1] &= ~((hydro_x25519_limb_t) 1 << (hydro_x25519_WBITS - 1));
+	x[hydro_x25519_NLIMBS - 1] &= ~((hydro_x25519_limb_t)1 << (hydro_x25519_WBITS - 1));
 	carry = over * 19;
 	for (i = 0; i < hydro_x25519_NLIMBS; i++) {
 		x[i] = hydro_x25519_adc0(&carry, x[i]);
@@ -2659,8 +2551,7 @@ hydro_x25519_propagate(hydro_x25519_fe x, hydro_x25519_limb_t over)
 }
 
 static void
-hydro_x25519_add(hydro_x25519_fe out, const hydro_x25519_fe a, const hydro_x25519_fe b)
-{
+hydro_x25519_add(hydro_x25519_fe out, const hydro_x25519_fe a, const hydro_x25519_fe b) {
 	hydro_x25519_limb_t carry = 0;
 	int                 i;
 
@@ -2671,8 +2562,7 @@ hydro_x25519_add(hydro_x25519_fe out, const hydro_x25519_fe a, const hydro_x2551
 }
 
 static void
-hydro_x25519_sub(hydro_x25519_fe out, const hydro_x25519_fe a, const hydro_x25519_fe b)
-{
+hydro_x25519_sub(hydro_x25519_fe out, const hydro_x25519_fe a, const hydro_x25519_fe b) {
 	hydro_x25519_sdlimb_t carry = -38;
 	int                   i;
 
@@ -2684,8 +2574,7 @@ hydro_x25519_sub(hydro_x25519_fe out, const hydro_x25519_fe a, const hydro_x2551
 }
 
 static void
-hydro_x25519_swapin(hydro_x25519_limb_t *x, const uint8_t *in)
-{
+hydro_x25519_swapin(hydro_x25519_limb_t* x, const uint8_t* in) {
 	int i;
 
 	memcpy(x, in, sizeof(hydro_x25519_fe));
@@ -2695,8 +2584,7 @@ hydro_x25519_swapin(hydro_x25519_limb_t *x, const uint8_t *in)
 }
 
 static void
-hydro_x25519_swapout(uint8_t *out, hydro_x25519_limb_t *x)
-{
+hydro_x25519_swapout(uint8_t* out, hydro_x25519_limb_t* x) {
 	int i;
 
 	for (i = 0; i < hydro_x25519_NLIMBS; i++) {
@@ -2706,14 +2594,13 @@ hydro_x25519_swapout(uint8_t *out, hydro_x25519_limb_t *x)
 }
 
 static void
-hydro_x25519_mul(hydro_x25519_fe out, const hydro_x25519_fe a, const hydro_x25519_fe b, int nb)
-{
+hydro_x25519_mul(hydro_x25519_fe out, const hydro_x25519_fe a, const hydro_x25519_fe b, int nb) {
 	hydro_x25519_limb_t accum[2 * hydro_x25519_NLIMBS] = { 0 };
 	hydro_x25519_limb_t carry2;
 	int                 i, j;
 
 	for (i = 0; i < nb; i++) {
-		carry2                   = 0;
+		carry2 = 0;
 		hydro_x25519_limb_t mand = b[i];
 		for (j = 0; j < hydro_x25519_NLIMBS; j++) {
 			accum[i + j] = hydro_x25519_umaal(&carry2, accum[i + j], mand, a[j]);
@@ -2730,27 +2617,23 @@ hydro_x25519_mul(hydro_x25519_fe out, const hydro_x25519_fe a, const hydro_x2551
 }
 
 static void
-hydro_x25519_sqr(hydro_x25519_fe out, const hydro_x25519_fe a)
-{
+hydro_x25519_sqr(hydro_x25519_fe out, const hydro_x25519_fe a) {
 	hydro_x25519_mul(out, a, a, hydro_x25519_NLIMBS);
 }
 
 static void
-hydro_x25519_mul1(hydro_x25519_fe out, const hydro_x25519_fe a)
-{
+hydro_x25519_mul1(hydro_x25519_fe out, const hydro_x25519_fe a) {
 	hydro_x25519_mul(out, a, out, hydro_x25519_NLIMBS);
 }
 
 static void
-hydro_x25519_sqr1(hydro_x25519_fe a)
-{
+hydro_x25519_sqr1(hydro_x25519_fe a) {
 	hydro_x25519_mul1(a, a);
 }
 
 static void
 hydro_x25519_condswap(hydro_x25519_limb_t a[2 * hydro_x25519_NLIMBS],
-					  hydro_x25519_limb_t b[2 * hydro_x25519_NLIMBS], hydro_x25519_limb_t doswap)
-{
+	hydro_x25519_limb_t b[2 * hydro_x25519_NLIMBS], hydro_x25519_limb_t doswap) {
 	int i;
 
 	for (i = 0; i < 2 * hydro_x25519_NLIMBS; i++) {
@@ -2761,8 +2644,7 @@ hydro_x25519_condswap(hydro_x25519_limb_t a[2 * hydro_x25519_NLIMBS],
 }
 
 static int
-hydro_x25519_canon(hydro_x25519_fe x)
-{
+hydro_x25519_canon(hydro_x25519_fe x) {
 	hydro_x25519_sdlimb_t carry;
 	hydro_x25519_limb_t   carry0 = 19;
 	hydro_x25519_limb_t   res;
@@ -2773,18 +2655,17 @@ hydro_x25519_canon(hydro_x25519_fe x)
 	}
 	hydro_x25519_propagate(x, carry0);
 	carry = -19;
-	res   = 0;
+	res = 0;
 	for (i = 0; i < hydro_x25519_NLIMBS; i++) {
 		res |= x[i] = (hydro_x25519_limb_t)(carry += x[i]);
 		carry >>= hydro_x25519_WBITS;
 	}
-	return ((hydro_x25519_dlimb_t) res - 1) >> hydro_x25519_WBITS;
+	return ((hydro_x25519_dlimb_t)res - 1) >> hydro_x25519_WBITS;
 }
 
 static void
-hydro_x25519_ladder_part1(hydro_x25519_fe xs[5])
-{
-	hydro_x25519_limb_t *x2 = xs[0], *z2 = xs[1], *x3 = xs[2], *z3 = xs[3], *t1 = xs[4];
+hydro_x25519_ladder_part1(hydro_x25519_fe xs[5]) {
+	hydro_x25519_limb_t* x2 = xs[0], * z2 = xs[1], * x3 = xs[2], * z3 = xs[3], * t1 = xs[4];
 
 	hydro_x25519_add(t1, x2, z2);              // t1 = A
 	hydro_x25519_sub(z2, x2, z2);              // z2 = B
@@ -2798,14 +2679,13 @@ hydro_x25519_ladder_part1(hydro_x25519_fe xs[5])
 	hydro_x25519_sqr1(z2);                     // z2 = BB
 	hydro_x25519_sub(x2, t1, z2);              // x2 = E = AA-BB
 	hydro_x25519_mul(z2, x2, hydro_x25519_a24, // z2 = E*a24
-					 sizeof(hydro_x25519_a24) / sizeof(hydro_x25519_a24[0]));
+		sizeof(hydro_x25519_a24) / sizeof(hydro_x25519_a24[0]));
 	hydro_x25519_add(z2, z2, t1); // z2 = E*a24 + AA
 }
 
 static void
-hydro_x25519_ladder_part2(hydro_x25519_fe xs[5], const hydro_x25519_fe x1)
-{
-	hydro_x25519_limb_t *x2 = xs[0], *z2 = xs[1], *x3 = xs[2], *z3 = xs[3], *t1 = xs[4];
+hydro_x25519_ladder_part2(hydro_x25519_fe xs[5], const hydro_x25519_fe x1) {
+	hydro_x25519_limb_t* x2 = xs[0], * z2 = xs[1], * x3 = xs[2], * z3 = xs[3], * t1 = xs[4];
 
 	hydro_x25519_sqr1(z3);        // z3 = (DA-CB)^2
 	hydro_x25519_mul1(z3, x1);    // z3 = x1 * (DA-CB)^2
@@ -2817,15 +2697,14 @@ hydro_x25519_ladder_part2(hydro_x25519_fe xs[5], const hydro_x25519_fe x1)
 
 static void
 hydro_x25519_core(hydro_x25519_fe xs[5], const uint8_t scalar[hydro_x25519_BYTES],
-				  const uint8_t *x1, bool clamp)
-{
+	const uint8_t* x1, bool clamp) {
 	hydro_x25519_limb_t  swap;
-	hydro_x25519_limb_t *x2 = xs[0], *x3 = xs[2], *z3 = xs[3];
+	hydro_x25519_limb_t* x2 = xs[0], * x3 = xs[2], * z3 = xs[3];
 	hydro_x25519_fe      x1i;
 	int                  i;
 
 	hydro_x25519_swapin(x1i, x1);
-	x1   = (const uint8_t *) x1i;
+	x1 = (const uint8_t*)x1i;
 	swap = 0;
 	mem_zero(xs, 4 * sizeof(hydro_x25519_fe));
 	x2[0] = z3[0] = 1;
@@ -2855,21 +2734,20 @@ hydro_x25519_core(hydro_x25519_fe xs[5], const uint8_t scalar[hydro_x25519_BYTES
 
 static int
 hydro_x25519_scalarmult(uint8_t       out[hydro_x25519_BYTES],
-						const uint8_t scalar[hydro_x25519_SECRETKEYBYTES],
-						const uint8_t x1[hydro_x25519_PUBLICKEYBYTES], bool clamp)
-{
+	const uint8_t scalar[hydro_x25519_SECRETKEYBYTES],
+	const uint8_t x1[hydro_x25519_PUBLICKEYBYTES], bool clamp) {
 	hydro_x25519_fe      xs[5];
-	hydro_x25519_limb_t *x2, *z2, *z3;
-	hydro_x25519_limb_t *prev;
+	hydro_x25519_limb_t* x2, * z2, * z3;
+	hydro_x25519_limb_t* prev;
 	int                  i;
 	int                  ret;
 
 	hydro_x25519_core(xs, scalar, x1, clamp);
 
 	/* Precomputed inversion chain */
-	x2   = xs[0];
-	z2   = xs[1];
-	z3   = xs[3];
+	x2 = xs[0];
+	z2 = xs[1];
+	z3 = xs[3];
 	prev = z2;
 
 	/* Raise to the p-2 = 0x7f..ffeb */
@@ -2895,15 +2773,13 @@ hydro_x25519_scalarmult(uint8_t       out[hydro_x25519_BYTES],
 
 static inline int
 hydro_x25519_scalarmult_base(uint8_t       pk[hydro_x25519_PUBLICKEYBYTES],
-							 const uint8_t sk[hydro_x25519_SECRETKEYBYTES])
-{
+	const uint8_t sk[hydro_x25519_SECRETKEYBYTES]) {
 	return hydro_x25519_scalarmult(pk, sk, hydro_x25519_BASE_POINT, 1);
 }
 
 static inline void
 hydro_x25519_scalarmult_base_uniform(uint8_t       pk[hydro_x25519_PUBLICKEYBYTES],
-									 const uint8_t sk[hydro_x25519_SECRETKEYBYTES])
-{
+	const uint8_t sk[hydro_x25519_SECRETKEYBYTES]) {
 	if (hydro_x25519_scalarmult(pk, sk, hydro_x25519_BASE_POINT, 0) != 0) {
 		abort();
 	}
@@ -2911,14 +2787,13 @@ hydro_x25519_scalarmult_base_uniform(uint8_t       pk[hydro_x25519_PUBLICKEYBYTE
 
 static void
 hydro_x25519_sc_montmul(hydro_x25519_scalar_t out, const hydro_x25519_scalar_t a,
-						const hydro_x25519_scalar_t b)
-{
+	const hydro_x25519_scalar_t b) {
 	hydro_x25519_limb_t hic = 0;
 	int                 i, j;
 
 	for (i = 0; i < hydro_x25519_NLIMBS; i++) {
 		hydro_x25519_limb_t carry = 0, carry2 = 0, mand = a[i],
-							mand2 = hydro_x25519_MONTGOMERY_FACTOR;
+			mand2 = hydro_x25519_MONTGOMERY_FACTOR;
 
 		for (j = 0; j < hydro_x25519_NLIMBS; j++) {
 			hydro_x25519_limb_t acc = out[j];
@@ -2943,7 +2818,7 @@ hydro_x25519_sc_montmul(hydro_x25519_scalar_t out, const hydro_x25519_scalar_t a
 		out[i] = (hydro_x25519_limb_t)(scarry = scarry + out[i] - hydro_x25519_sc_p[i]);
 		scarry >>= hydro_x25519_WBITS;
 	}
-	hydro_x25519_limb_t need_add = (hydro_x25519_limb_t) - (scarry + hic);
+	hydro_x25519_limb_t need_add = (hydro_x25519_limb_t)-(scarry + hic);
 
 	hydro_x25519_limb_t carry = 0;
 	for (i = 0; i < hydro_x25519_NLIMBS; i++) {
@@ -2959,8 +2834,7 @@ hydro_x25519_sc_montmul(hydro_x25519_scalar_t out, const hydro_x25519_scalar_t a
 
 static void
 hydro_kx_aead_init(uint8_t aead_state[gimli_BLOCKBYTES], uint8_t k[hydro_kx_AEAD_KEYBYTES],
-				   hydro_kx_state *state)
-{
+	hydro_kx_state* state) {
 	static const uint8_t prefix[] = { 6, 'k', 'x', 'x', '2', '5', '6', 0 };
 
 	hydro_hash_final(&state->h_st, k, hydro_kx_AEAD_KEYBYTES);
@@ -2977,8 +2851,7 @@ hydro_kx_aead_init(uint8_t aead_state[gimli_BLOCKBYTES], uint8_t k[hydro_kx_AEAD
 }
 
 static void
-hydro_kx_aead_final(uint8_t *aead_state, const uint8_t key[hydro_kx_AEAD_KEYBYTES])
-{
+hydro_kx_aead_final(uint8_t* aead_state, const uint8_t key[hydro_kx_AEAD_KEYBYTES]) {
 	COMPILER_ASSERT(hydro_kx_AEAD_KEYBYTES == gimli_CAPACITY);
 	mem_xor(aead_state + gimli_RATE, key, hydro_kx_AEAD_KEYBYTES);
 	gimli_core_u8(aead_state, gimli_TAG_FINAL);
@@ -2987,9 +2860,8 @@ hydro_kx_aead_final(uint8_t *aead_state, const uint8_t key[hydro_kx_AEAD_KEYBYTE
 }
 
 static void
-hydro_kx_aead_xor_enc(uint8_t aead_state[gimli_BLOCKBYTES], uint8_t *out, const uint8_t *in,
-					  size_t inlen)
-{
+hydro_kx_aead_xor_enc(uint8_t aead_state[gimli_BLOCKBYTES], uint8_t* out, const uint8_t* in,
+	size_t inlen) {
 	size_t i;
 	size_t leftover;
 
@@ -3008,9 +2880,8 @@ hydro_kx_aead_xor_enc(uint8_t aead_state[gimli_BLOCKBYTES], uint8_t *out, const 
 }
 
 static void
-hydro_kx_aead_xor_dec(uint8_t aead_state[gimli_BLOCKBYTES], uint8_t *out, const uint8_t *in,
-					  size_t inlen)
-{
+hydro_kx_aead_xor_dec(uint8_t aead_state[gimli_BLOCKBYTES], uint8_t* out, const uint8_t* in,
+	size_t inlen) {
 	size_t i;
 	size_t leftover;
 
@@ -3029,12 +2900,11 @@ hydro_kx_aead_xor_dec(uint8_t aead_state[gimli_BLOCKBYTES], uint8_t *out, const 
 }
 
 static void
-hydro_kx_aead_encrypt(hydro_kx_state *state, uint8_t *c, const uint8_t *m, size_t mlen)
-{
+hydro_kx_aead_encrypt(hydro_kx_state* state, uint8_t* c, const uint8_t* m, size_t mlen) {
 	_hydro_attr_aligned_(16) uint8_t aead_state[gimli_BLOCKBYTES];
 	uint8_t                          k[hydro_kx_AEAD_KEYBYTES];
-	uint8_t *                        mac = &c[0];
-	uint8_t *                        ct  = &c[hydro_kx_AEAD_MACBYTES];
+	uint8_t* mac = &c[0];
+	uint8_t* ct = &c[hydro_kx_AEAD_MACBYTES];
 
 	hydro_kx_aead_init(aead_state, k, state);
 	hydro_kx_aead_xor_enc(aead_state, ct, m, mlen);
@@ -3044,26 +2914,25 @@ hydro_kx_aead_encrypt(hydro_kx_state *state, uint8_t *c, const uint8_t *m, size_
 	hydro_hash_update(&state->h_st, c, mlen + hydro_kx_AEAD_MACBYTES);
 }
 
-static int hydro_kx_aead_decrypt(hydro_kx_state *state, uint8_t *m, const uint8_t *c,
-								 size_t clen) _hydro_attr_warn_unused_result_;
+static int hydro_kx_aead_decrypt(hydro_kx_state* state, uint8_t* m, const uint8_t* c,
+	size_t clen) _hydro_attr_warn_unused_result_;
 
 static int
-hydro_kx_aead_decrypt(hydro_kx_state *state, uint8_t *m, const uint8_t *c, size_t clen)
-{
+hydro_kx_aead_decrypt(hydro_kx_state* state, uint8_t* m, const uint8_t* c, size_t clen) {
 	_hydro_attr_aligned_(16) uint32_t int_state[gimli_BLOCKBYTES / 4];
 	uint32_t                          pub_mac[hydro_kx_AEAD_MACBYTES / 4];
 	uint8_t                           k[hydro_kx_AEAD_KEYBYTES];
-	uint8_t *                         aead_state = (uint8_t *) (void *) int_state;
-	const uint8_t *                   mac;
-	const uint8_t *                   ct;
+	uint8_t* aead_state = (uint8_t*)(void*)int_state;
+	const uint8_t* mac;
+	const uint8_t* ct;
 	size_t                            mlen;
 	uint32_t                          cv;
 
 	if (clen < hydro_kx_AEAD_MACBYTES) {
 		return -1;
 	}
-	mac  = &c[0];
-	ct   = &c[hydro_kx_AEAD_MACBYTES];
+	mac = &c[0];
+	ct = &c[hydro_kx_AEAD_MACBYTES];
 	mlen = clen - hydro_kx_AEAD_MACBYTES;
 	memcpy(pub_mac, mac, sizeof pub_mac);
 	hydro_kx_aead_init(aead_state, k, state);
@@ -3084,8 +2953,7 @@ hydro_kx_aead_decrypt(hydro_kx_state *state, uint8_t *m, const uint8_t *c, size_
 /* -- */
 
 void
-hydro_kx_keygen(hydro_kx_keypair *static_kp)
-{
+hydro_kx_keygen(hydro_kx_keypair* static_kp) {
 	hydro_random_buf(static_kp->sk, hydro_kx_SECRETKEYBYTES);
 	if (hydro_x25519_scalarmult_base(static_kp->pk, static_kp->sk) != 0) {
 		abort();
@@ -3093,8 +2961,7 @@ hydro_kx_keygen(hydro_kx_keypair *static_kp)
 }
 
 void
-hydro_kx_keygen_deterministic(hydro_kx_keypair *static_kp, const uint8_t seed[hydro_kx_SEEDBYTES])
-{
+hydro_kx_keygen_deterministic(hydro_kx_keypair* static_kp, const uint8_t seed[hydro_kx_SEEDBYTES]) {
 	COMPILER_ASSERT(hydro_kx_SEEDBYTES >= hydro_random_SEEDBYTES);
 	hydro_random_buf_deterministic(static_kp->sk, hydro_kx_SECRETKEYBYTES, seed);
 	if (hydro_x25519_scalarmult_base(static_kp->pk, static_kp->sk) != 0) {
@@ -3103,18 +2970,16 @@ hydro_kx_keygen_deterministic(hydro_kx_keypair *static_kp, const uint8_t seed[hy
 }
 
 static void
-hydro_kx_init_state(hydro_kx_state *state, const char *name)
-{
-	mem_zero(state, sizeof *state);
+hydro_kx_init_state(hydro_kx_state* state, const char* name) {
+	mem_zero(state, sizeof * state);
 	hydro_hash_init(&state->h_st, hydro_kx_CONTEXT, NULL);
 	hydro_hash_update(&state->h_st, name, strlen(name));
 	hydro_hash_final(&state->h_st, NULL, 0);
 }
 
 static void
-hydro_kx_final(hydro_kx_state *state, uint8_t session_k1[hydro_kx_SESSIONKEYBYTES],
-			   uint8_t session_k2[hydro_kx_SESSIONKEYBYTES])
-{
+hydro_kx_final(hydro_kx_state* state, uint8_t session_k1[hydro_kx_SESSIONKEYBYTES],
+	uint8_t session_k2[hydro_kx_SESSIONKEYBYTES]) {
 	uint8_t kdf_key[hydro_kdf_KEYBYTES];
 
 	hydro_hash_final(&state->h_st, kdf_key, sizeof kdf_key);
@@ -3123,9 +2988,8 @@ hydro_kx_final(hydro_kx_state *state, uint8_t session_k1[hydro_kx_SESSIONKEYBYTE
 }
 
 static int
-hydro_kx_dh(hydro_kx_state *state, const uint8_t sk[hydro_x25519_SECRETKEYBYTES],
-			const uint8_t pk[hydro_x25519_PUBLICKEYBYTES])
-{
+hydro_kx_dh(hydro_kx_state* state, const uint8_t sk[hydro_x25519_SECRETKEYBYTES],
+	const uint8_t pk[hydro_x25519_PUBLICKEYBYTES]) {
 	uint8_t dh_result[hydro_x25519_BYTES];
 
 	if (hydro_x25519_scalarmult(dh_result, sk, pk, 1) != 0) {
@@ -3137,8 +3001,7 @@ hydro_kx_dh(hydro_kx_state *state, const uint8_t sk[hydro_x25519_SECRETKEYBYTES]
 }
 
 static void
-hydro_kx_eph_keygen(hydro_kx_state *state, hydro_kx_keypair *kp)
-{
+hydro_kx_eph_keygen(hydro_kx_state* state, hydro_kx_keypair* kp) {
 	hydro_kx_keygen(kp);
 	hydro_hash_update(&state->h_st, kp->pk, sizeof kp->pk);
 }
@@ -3146,13 +3009,12 @@ hydro_kx_eph_keygen(hydro_kx_state *state, hydro_kx_keypair *kp)
 /* NOISE_N */
 
 int
-hydro_kx_n_1(hydro_kx_session_keypair *kp, uint8_t packet1[hydro_kx_N_PACKET1BYTES],
-			 const uint8_t psk[hydro_kx_PSKBYTES],
-			 const uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES])
-{
+hydro_kx_n_1(hydro_kx_session_keypair* kp, uint8_t packet1[hydro_kx_N_PACKET1BYTES],
+	const uint8_t psk[hydro_kx_PSKBYTES],
+	const uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES]) {
 	hydro_kx_state state;
-	uint8_t *      packet1_eph_pk = &packet1[0];
-	uint8_t *      packet1_mac    = &packet1[hydro_kx_PUBLICKEYBYTES];
+	uint8_t* packet1_eph_pk = &packet1[0];
+	uint8_t* packet1_mac = &packet1[hydro_kx_PUBLICKEYBYTES];
 
 	if (psk == NULL) {
 		psk = zero;
@@ -3174,12 +3036,11 @@ hydro_kx_n_1(hydro_kx_session_keypair *kp, uint8_t packet1[hydro_kx_N_PACKET1BYT
 }
 
 int
-hydro_kx_n_2(hydro_kx_session_keypair *kp, const uint8_t packet1[hydro_kx_N_PACKET1BYTES],
-			 const uint8_t psk[hydro_kx_PSKBYTES], const hydro_kx_keypair *static_kp)
-{
+hydro_kx_n_2(hydro_kx_session_keypair* kp, const uint8_t packet1[hydro_kx_N_PACKET1BYTES],
+	const uint8_t psk[hydro_kx_PSKBYTES], const hydro_kx_keypair* static_kp) {
 	hydro_kx_state state;
-	const uint8_t *peer_eph_pk = &packet1[0];
-	const uint8_t *packet1_mac = &packet1[hydro_kx_PUBLICKEYBYTES];
+	const uint8_t* peer_eph_pk = &packet1[0];
+	const uint8_t* packet1_mac = &packet1[hydro_kx_PUBLICKEYBYTES];
 
 	if (psk == NULL) {
 		psk = zero;
@@ -3201,12 +3062,11 @@ hydro_kx_n_2(hydro_kx_session_keypair *kp, const uint8_t packet1[hydro_kx_N_PACK
 /* NOISE_KK */
 
 int
-hydro_kx_kk_1(hydro_kx_state *state, uint8_t packet1[hydro_kx_KK_PACKET1BYTES],
-			  const uint8_t           peer_static_pk[hydro_kx_PUBLICKEYBYTES],
-			  const hydro_kx_keypair *static_kp)
-{
-	uint8_t *packet1_eph_pk = &packet1[0];
-	uint8_t *packet1_mac    = &packet1[hydro_kx_PUBLICKEYBYTES];
+hydro_kx_kk_1(hydro_kx_state* state, uint8_t packet1[hydro_kx_KK_PACKET1BYTES],
+	const uint8_t           peer_static_pk[hydro_kx_PUBLICKEYBYTES],
+	const hydro_kx_keypair* static_kp) {
+	uint8_t* packet1_eph_pk = &packet1[0];
+	uint8_t* packet1_mac = &packet1[hydro_kx_PUBLICKEYBYTES];
 
 	hydro_kx_init_state(state, "Noise_KK_hydro1");
 	hydro_hash_update(&state->h_st, static_kp->pk, hydro_kx_PUBLICKEYBYTES);
@@ -3224,16 +3084,15 @@ hydro_kx_kk_1(hydro_kx_state *state, uint8_t packet1[hydro_kx_KK_PACKET1BYTES],
 }
 
 int
-hydro_kx_kk_2(hydro_kx_session_keypair *kp, uint8_t packet2[hydro_kx_KK_PACKET2BYTES],
-			  const uint8_t           packet1[hydro_kx_KK_PACKET1BYTES],
-			  const uint8_t           peer_static_pk[hydro_kx_PUBLICKEYBYTES],
-			  const hydro_kx_keypair *static_kp)
-{
+hydro_kx_kk_2(hydro_kx_session_keypair* kp, uint8_t packet2[hydro_kx_KK_PACKET2BYTES],
+	const uint8_t           packet1[hydro_kx_KK_PACKET1BYTES],
+	const uint8_t           peer_static_pk[hydro_kx_PUBLICKEYBYTES],
+	const hydro_kx_keypair* static_kp) {
 	hydro_kx_state state;
-	const uint8_t *peer_eph_pk    = &packet1[0];
-	const uint8_t *packet1_mac    = &packet1[hydro_kx_PUBLICKEYBYTES];
-	uint8_t *      packet2_eph_pk = &packet2[0];
-	uint8_t *      packet2_mac    = &packet2[hydro_kx_PUBLICKEYBYTES];
+	const uint8_t* peer_eph_pk = &packet1[0];
+	const uint8_t* packet1_mac = &packet1[hydro_kx_PUBLICKEYBYTES];
+	uint8_t* packet2_eph_pk = &packet2[0];
+	uint8_t* packet2_mac = &packet2[hydro_kx_PUBLICKEYBYTES];
 
 	hydro_kx_init_state(&state, "Noise_KK_hydro1");
 	hydro_hash_update(&state.h_st, peer_static_pk, hydro_kx_PUBLICKEYBYTES);
@@ -3259,11 +3118,10 @@ hydro_kx_kk_2(hydro_kx_session_keypair *kp, uint8_t packet2[hydro_kx_KK_PACKET2B
 }
 
 int
-hydro_kx_kk_3(hydro_kx_state *state, hydro_kx_session_keypair *kp,
-			  const uint8_t packet2[hydro_kx_KK_PACKET2BYTES], const hydro_kx_keypair *static_kp)
-{
-	const uint8_t *peer_eph_pk = packet2;
-	const uint8_t *packet2_mac = &packet2[hydro_kx_PUBLICKEYBYTES];
+hydro_kx_kk_3(hydro_kx_state* state, hydro_kx_session_keypair* kp,
+	const uint8_t packet2[hydro_kx_KK_PACKET2BYTES], const hydro_kx_keypair* static_kp) {
+	const uint8_t* peer_eph_pk = packet2;
+	const uint8_t* packet2_mac = &packet2[hydro_kx_PUBLICKEYBYTES];
 
 	hydro_hash_update(&state->h_st, peer_eph_pk, hydro_kx_PUBLICKEYBYTES);
 	if (hydro_kx_dh(state, state->eph_kp.sk, peer_eph_pk) != 0 ||
@@ -3282,11 +3140,10 @@ hydro_kx_kk_3(hydro_kx_state *state, hydro_kx_session_keypair *kp,
 /* NOISE_XX */
 
 int
-hydro_kx_xx_1(hydro_kx_state *state, uint8_t packet1[hydro_kx_XX_PACKET1BYTES],
-			  const uint8_t psk[hydro_kx_PSKBYTES])
-{
-	uint8_t *packet1_eph_pk = &packet1[0];
-	uint8_t *packet1_mac    = &packet1[hydro_kx_PUBLICKEYBYTES];
+hydro_kx_xx_1(hydro_kx_state* state, uint8_t packet1[hydro_kx_XX_PACKET1BYTES],
+	const uint8_t psk[hydro_kx_PSKBYTES]) {
+	uint8_t* packet1_eph_pk = &packet1[0];
+	uint8_t* packet1_mac = &packet1[hydro_kx_PUBLICKEYBYTES];
 
 	if (psk == NULL) {
 		psk = zero;
@@ -3302,15 +3159,14 @@ hydro_kx_xx_1(hydro_kx_state *state, uint8_t packet1[hydro_kx_XX_PACKET1BYTES],
 }
 
 int
-hydro_kx_xx_2(hydro_kx_state *state, uint8_t packet2[hydro_kx_XX_PACKET2BYTES],
-			  const uint8_t packet1[hydro_kx_XX_PACKET1BYTES], const uint8_t psk[hydro_kx_PSKBYTES],
-			  const hydro_kx_keypair *static_kp)
-{
-	const uint8_t *peer_eph_pk           = &packet1[0];
-	const uint8_t *packet1_mac           = &packet1[hydro_kx_PUBLICKEYBYTES];
-	uint8_t *      packet2_eph_pk        = &packet2[0];
-	uint8_t *      packet2_enc_static_pk = &packet2[hydro_kx_PUBLICKEYBYTES];
-	uint8_t *      packet2_mac =
+hydro_kx_xx_2(hydro_kx_state* state, uint8_t packet2[hydro_kx_XX_PACKET2BYTES],
+	const uint8_t packet1[hydro_kx_XX_PACKET1BYTES], const uint8_t psk[hydro_kx_PSKBYTES],
+	const hydro_kx_keypair* static_kp) {
+	const uint8_t* peer_eph_pk = &packet1[0];
+	const uint8_t* packet1_mac = &packet1[hydro_kx_PUBLICKEYBYTES];
+	uint8_t* packet2_eph_pk = &packet2[0];
+	uint8_t* packet2_enc_static_pk = &packet2[hydro_kx_PUBLICKEYBYTES];
+	uint8_t* packet2_mac =
 		&packet2[hydro_kx_PUBLICKEYBYTES + hydro_kx_PUBLICKEYBYTES + hydro_kx_AEAD_MACBYTES];
 
 	if (psk == NULL) {
@@ -3340,19 +3196,18 @@ hydro_kx_xx_2(hydro_kx_state *state, uint8_t packet2[hydro_kx_XX_PACKET2BYTES],
 }
 
 int
-hydro_kx_xx_3(hydro_kx_state *state, hydro_kx_session_keypair *kp,
-			  uint8_t       packet3[hydro_kx_XX_PACKET3BYTES],
-			  uint8_t       peer_static_pk[hydro_kx_PUBLICKEYBYTES],
-			  const uint8_t packet2[hydro_kx_XX_PACKET2BYTES], const uint8_t psk[hydro_kx_PSKBYTES],
-			  const hydro_kx_keypair *static_kp)
-{
+hydro_kx_xx_3(hydro_kx_state* state, hydro_kx_session_keypair* kp,
+	uint8_t       packet3[hydro_kx_XX_PACKET3BYTES],
+	uint8_t       peer_static_pk[hydro_kx_PUBLICKEYBYTES],
+	const uint8_t packet2[hydro_kx_XX_PACKET2BYTES], const uint8_t psk[hydro_kx_PSKBYTES],
+	const hydro_kx_keypair* static_kp) {
 	uint8_t        peer_static_pk_[hydro_kx_PUBLICKEYBYTES];
-	const uint8_t *peer_eph_pk        = &packet2[0];
-	const uint8_t *peer_enc_static_pk = &packet2[hydro_kx_PUBLICKEYBYTES];
-	const uint8_t *packet2_mac =
+	const uint8_t* peer_eph_pk = &packet2[0];
+	const uint8_t* peer_enc_static_pk = &packet2[hydro_kx_PUBLICKEYBYTES];
+	const uint8_t* packet2_mac =
 		&packet2[hydro_kx_PUBLICKEYBYTES + hydro_kx_PUBLICKEYBYTES + hydro_kx_AEAD_MACBYTES];
-	uint8_t *packet3_enc_static_pk = &packet3[0];
-	uint8_t *packet3_mac           = &packet3[hydro_kx_PUBLICKEYBYTES + hydro_kx_AEAD_MACBYTES];
+	uint8_t* packet3_enc_static_pk = &packet3[0];
+	uint8_t* packet3_mac = &packet3[hydro_kx_PUBLICKEYBYTES + hydro_kx_AEAD_MACBYTES];
 
 	if (psk == NULL) {
 		psk = zero;
@@ -3363,7 +3218,7 @@ hydro_kx_xx_3(hydro_kx_state *state, hydro_kx_session_keypair *kp,
 	hydro_hash_update(&state->h_st, peer_eph_pk, hydro_kx_PUBLICKEYBYTES);
 	if (hydro_kx_dh(state, state->eph_kp.sk, peer_eph_pk) != 0 ||
 		hydro_kx_aead_decrypt(state, peer_static_pk, peer_enc_static_pk,
-							  hydro_kx_PUBLICKEYBYTES + hydro_kx_AEAD_MACBYTES) != 0 ||
+			hydro_kx_PUBLICKEYBYTES + hydro_kx_AEAD_MACBYTES) != 0 ||
 		hydro_kx_dh(state, state->eph_kp.sk, peer_static_pk) != 0 ||
 		hydro_kx_aead_decrypt(state, NULL, packet2_mac, hydro_kx_AEAD_MACBYTES) != 0) {
 		return -1;
@@ -3381,13 +3236,12 @@ hydro_kx_xx_3(hydro_kx_state *state, hydro_kx_session_keypair *kp,
 }
 
 int
-hydro_kx_xx_4(hydro_kx_state *state, hydro_kx_session_keypair *kp,
-			  uint8_t       peer_static_pk[hydro_kx_PUBLICKEYBYTES],
-			  const uint8_t packet3[hydro_kx_XX_PACKET3BYTES], const uint8_t psk[hydro_kx_PSKBYTES])
-{
+hydro_kx_xx_4(hydro_kx_state* state, hydro_kx_session_keypair* kp,
+	uint8_t       peer_static_pk[hydro_kx_PUBLICKEYBYTES],
+	const uint8_t packet3[hydro_kx_XX_PACKET3BYTES], const uint8_t psk[hydro_kx_PSKBYTES]) {
 	uint8_t        peer_static_pk_[hydro_kx_PUBLICKEYBYTES];
-	const uint8_t *peer_enc_static_pk = &packet3[0];
-	const uint8_t *packet3_mac        = &packet3[hydro_kx_PUBLICKEYBYTES + hydro_kx_AEAD_MACBYTES];
+	const uint8_t* peer_enc_static_pk = &packet3[0];
+	const uint8_t* packet3_mac = &packet3[hydro_kx_PUBLICKEYBYTES + hydro_kx_AEAD_MACBYTES];
 
 	if (psk == NULL) {
 		psk = zero;
@@ -3396,7 +3250,7 @@ hydro_kx_xx_4(hydro_kx_state *state, hydro_kx_session_keypair *kp,
 		peer_static_pk = peer_static_pk_;
 	}
 	if (hydro_kx_aead_decrypt(state, peer_static_pk, peer_enc_static_pk,
-							  hydro_kx_PUBLICKEYBYTES + hydro_kx_AEAD_MACBYTES) != 0 ||
+		hydro_kx_PUBLICKEYBYTES + hydro_kx_AEAD_MACBYTES) != 0 ||
 		hydro_kx_dh(state, state->eph_kp.sk, peer_static_pk) != 0) {
 		return -1;
 	}
@@ -3412,12 +3266,11 @@ hydro_kx_xx_4(hydro_kx_state *state, hydro_kx_session_keypair *kp,
 /* NOISE_NK */
 
 int
-hydro_kx_nk_1(hydro_kx_state *state, uint8_t packet1[hydro_kx_NK_PACKET1BYTES],
-			  const uint8_t psk[hydro_kx_PSKBYTES],
-			  const uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES])
-{
-	uint8_t *packet1_eph_pk = &packet1[0];
-	uint8_t *packet1_mac    = &packet1[hydro_kx_PUBLICKEYBYTES];
+hydro_kx_nk_1(hydro_kx_state* state, uint8_t packet1[hydro_kx_NK_PACKET1BYTES],
+	const uint8_t psk[hydro_kx_PSKBYTES],
+	const uint8_t peer_static_pk[hydro_kx_PUBLICKEYBYTES]) {
+	uint8_t* packet1_eph_pk = &packet1[0];
+	uint8_t* packet1_mac = &packet1[hydro_kx_PUBLICKEYBYTES];
 
 	if (psk == NULL) {
 		psk = zero;
@@ -3437,15 +3290,14 @@ hydro_kx_nk_1(hydro_kx_state *state, uint8_t packet1[hydro_kx_NK_PACKET1BYTES],
 }
 
 int
-hydro_kx_nk_2(hydro_kx_session_keypair *kp, uint8_t packet2[hydro_kx_NK_PACKET2BYTES],
-			  const uint8_t packet1[hydro_kx_NK_PACKET1BYTES], const uint8_t psk[hydro_kx_PSKBYTES],
-			  const hydro_kx_keypair *static_kp)
-{
+hydro_kx_nk_2(hydro_kx_session_keypair* kp, uint8_t packet2[hydro_kx_NK_PACKET2BYTES],
+	const uint8_t packet1[hydro_kx_NK_PACKET1BYTES], const uint8_t psk[hydro_kx_PSKBYTES],
+	const hydro_kx_keypair* static_kp) {
 	hydro_kx_state state;
-	const uint8_t *peer_eph_pk    = &packet1[0];
-	const uint8_t *packet1_mac    = &packet1[hydro_kx_PUBLICKEYBYTES];
-	uint8_t *      packet2_eph_pk = &packet2[0];
-	uint8_t *      packet2_mac    = &packet2[hydro_kx_PUBLICKEYBYTES];
+	const uint8_t* peer_eph_pk = &packet1[0];
+	const uint8_t* packet1_mac = &packet1[hydro_kx_PUBLICKEYBYTES];
+	uint8_t* packet2_eph_pk = &packet2[0];
+	uint8_t* packet2_mac = &packet2[hydro_kx_PUBLICKEYBYTES];
 
 	if (psk == NULL) {
 		psk = zero;
@@ -3472,11 +3324,10 @@ hydro_kx_nk_2(hydro_kx_session_keypair *kp, uint8_t packet2[hydro_kx_NK_PACKET2B
 }
 
 int
-hydro_kx_nk_3(hydro_kx_state *state, hydro_kx_session_keypair *kp,
-			  const uint8_t packet2[hydro_kx_NK_PACKET2BYTES])
-{
-	const uint8_t *peer_eph_pk = &packet2[0];
-	const uint8_t *packet2_mac = &packet2[hydro_kx_PUBLICKEYBYTES];
+hydro_kx_nk_3(hydro_kx_state* state, hydro_kx_session_keypair* kp,
+	const uint8_t packet2[hydro_kx_NK_PACKET2BYTES]) {
+	const uint8_t* peer_eph_pk = &packet2[0];
+	const uint8_t* packet2_mac = &packet2[hydro_kx_PUBLICKEYBYTES];
 
 	hydro_hash_update(&state->h_st, peer_eph_pk, hydro_x25519_PUBLICKEYBYTES);
 	if (hydro_kx_dh(state, state->eph_kp.sk, peer_eph_pk) != 0 ||
@@ -3505,11 +3356,10 @@ hydro_kx_nk_3(hydro_kx_state *state, hydro_kx_session_keypair *kp,
 
 static int
 _hydro_pwhash_hash(uint8_t out[hydro_random_SEEDBYTES], size_t h_len,
-				   const uint8_t salt[hydro_pwhash_SALTBYTES], const char *passwd,
-				   size_t passwd_len, const char ctx[hydro_pwhash_CONTEXTBYTES],
-				   const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES], uint64_t opslimit,
-				   size_t memlimit, uint8_t threads)
-{
+	const uint8_t salt[hydro_pwhash_SALTBYTES], const char* passwd,
+	size_t passwd_len, const char ctx[hydro_pwhash_CONTEXTBYTES],
+	const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES], uint64_t opslimit,
+	size_t memlimit, uint8_t threads) {
 	_hydro_attr_aligned_(16) uint8_t state[gimli_BLOCKBYTES];
 	hydro_hash_state                 h_st;
 	uint8_t                          tmp64_u8[8];
@@ -3519,7 +3369,7 @@ _hydro_pwhash_hash(uint8_t out[hydro_random_SEEDBYTES], size_t h_len,
 	COMPILER_ASSERT(hydro_pwhash_MASTERKEYBYTES >= hydro_hash_KEYBYTES);
 	hydro_hash_init(&h_st, ctx, master_key);
 
-	STORE64_LE(tmp64_u8, (uint64_t) passwd_len);
+	STORE64_LE(tmp64_u8, (uint64_t)passwd_len);
 	hydro_hash_update(&h_st, tmp64_u8, sizeof tmp64_u8);
 	hydro_hash_update(&h_st, passwd, passwd_len);
 
@@ -3530,13 +3380,13 @@ _hydro_pwhash_hash(uint8_t out[hydro_random_SEEDBYTES], size_t h_len,
 
 	hydro_hash_update(&h_st, &threads, 1);
 
-	STORE64_LE(tmp64_u8, (uint64_t) memlimit);
+	STORE64_LE(tmp64_u8, (uint64_t)memlimit);
 	hydro_hash_update(&h_st, tmp64_u8, sizeof tmp64_u8);
 
-	STORE64_LE(tmp64_u8, (uint64_t) h_len);
+	STORE64_LE(tmp64_u8, (uint64_t)h_len);
 	hydro_hash_update(&h_st, tmp64_u8, sizeof tmp64_u8);
 
-	hydro_hash_final(&h_st, (uint8_t *) (void *) &state, sizeof state);
+	hydro_hash_final(&h_st, (uint8_t*)(void*)&state, sizeof state);
 
 	gimli_core_u8(state, 1);
 	COMPILER_ASSERT(gimli_RATE >= 8);
@@ -3555,25 +3405,23 @@ _hydro_pwhash_hash(uint8_t out[hydro_random_SEEDBYTES], size_t h_len,
 }
 
 void
-hydro_pwhash_keygen(uint8_t master_key[hydro_pwhash_MASTERKEYBYTES])
-{
+hydro_pwhash_keygen(uint8_t master_key[hydro_pwhash_MASTERKEYBYTES]) {
 	hydro_random_buf(master_key, hydro_pwhash_MASTERKEYBYTES);
 }
 
 int
-hydro_pwhash_deterministic(uint8_t *h, size_t h_len, const char *passwd, size_t passwd_len,
-						   const char    ctx[hydro_pwhash_CONTEXTBYTES],
-						   const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES], uint64_t opslimit,
-						   size_t memlimit, uint8_t threads)
-{
+hydro_pwhash_deterministic(uint8_t* h, size_t h_len, const char* passwd, size_t passwd_len,
+	const char    ctx[hydro_pwhash_CONTEXTBYTES],
+	const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES], uint64_t opslimit,
+	size_t memlimit, uint8_t threads) {
 	uint8_t seed[hydro_random_SEEDBYTES];
 
 	COMPILER_ASSERT(sizeof zero >= hydro_pwhash_SALTBYTES);
 	COMPILER_ASSERT(sizeof zero >= hydro_pwhash_MASTERKEYBYTES);
 
-	(void) memlimit;
+	(void)memlimit;
 	if (_hydro_pwhash_hash(seed, h_len, zero, passwd, passwd_len, ctx, master_key, opslimit,
-						   memlimit, threads) != 0) {
+		memlimit, threads) != 0) {
 		return -1;
 	}
 	hydro_random_buf_deterministic(h, h_len, seed);
@@ -3583,79 +3431,77 @@ hydro_pwhash_deterministic(uint8_t *h, size_t h_len, const char *passwd, size_t 
 }
 
 int
-hydro_pwhash_create(uint8_t stored[hydro_pwhash_STOREDBYTES], const char *passwd, size_t passwd_len,
-					const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES], uint64_t opslimit,
-					size_t memlimit, uint8_t threads)
-{
-	uint8_t *const enc_alg     = &stored[0];
-	uint8_t *const secretbox   = &enc_alg[hydro_pwhash_ENC_ALGBYTES];
-	uint8_t *const hash_alg    = &secretbox[hydro_secretbox_HEADERBYTES];
-	uint8_t *const threads_u8  = &hash_alg[hydro_pwhash_HASH_ALGBYTES];
-	uint8_t *const opslimit_u8 = &threads_u8[hydro_pwhash_THREADSBYTES];
-	uint8_t *const memlimit_u8 = &opslimit_u8[hydro_pwhash_OPSLIMITBYTES];
-	uint8_t *const salt        = &memlimit_u8[hydro_pwhash_MEMLIMITBYTES];
-	uint8_t *const h           = &salt[hydro_pwhash_SALTBYTES];
+hydro_pwhash_create(uint8_t stored[hydro_pwhash_STOREDBYTES], const char* passwd, size_t passwd_len,
+	const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES], uint64_t opslimit,
+	size_t memlimit, uint8_t threads) {
+	uint8_t* const enc_alg = &stored[0];
+	uint8_t* const secretbox = &enc_alg[hydro_pwhash_ENC_ALGBYTES];
+	uint8_t* const hash_alg = &secretbox[hydro_secretbox_HEADERBYTES];
+	uint8_t* const threads_u8 = &hash_alg[hydro_pwhash_HASH_ALGBYTES];
+	uint8_t* const opslimit_u8 = &threads_u8[hydro_pwhash_THREADSBYTES];
+	uint8_t* const memlimit_u8 = &opslimit_u8[hydro_pwhash_OPSLIMITBYTES];
+	uint8_t* const salt = &memlimit_u8[hydro_pwhash_MEMLIMITBYTES];
+	uint8_t* const h = &salt[hydro_pwhash_SALTBYTES];
 
 	COMPILER_ASSERT(hydro_pwhash_STOREDBYTES >= hydro_pwhash_ENC_ALGBYTES +
-													hydro_secretbox_HEADERBYTES +
-													hydro_pwhash_PARAMSBYTES);
-	(void) memlimit;
+		hydro_secretbox_HEADERBYTES +
+		hydro_pwhash_PARAMSBYTES);
+	(void)memlimit;
 	mem_zero(stored, hydro_pwhash_STOREDBYTES);
-	*enc_alg    = hydro_pwhash_ENC_ALG;
-	*hash_alg   = hydro_pwhash_HASH_ALG;
+	*enc_alg = hydro_pwhash_ENC_ALG;
+	*hash_alg = hydro_pwhash_HASH_ALG;
 	*threads_u8 = threads;
 	STORE64_LE(opslimit_u8, opslimit);
-	STORE64_LE(memlimit_u8, (uint64_t) memlimit);
+	STORE64_LE(memlimit_u8, (uint64_t)memlimit);
 	hydro_random_buf(salt, hydro_pwhash_SALTBYTES);
 
 	COMPILER_ASSERT(sizeof zero >= hydro_pwhash_MASTERKEYBYTES);
 	if (_hydro_pwhash_hash(h, hydro_pwhash_HASHBYTES, salt, passwd, passwd_len,
-						   hydro_pwhash_CONTEXT, zero, opslimit, memlimit, threads) != 0) {
+		hydro_pwhash_CONTEXT, zero, opslimit, memlimit, threads) != 0) {
 		return -1;
 	}
 	COMPILER_ASSERT(hydro_pwhash_MASTERKEYBYTES == hydro_secretbox_KEYBYTES);
 
 	return hydro_secretbox_encrypt(secretbox, hash_alg, hydro_pwhash_PARAMSBYTES,
-								   (uint64_t) *enc_alg, hydro_pwhash_CONTEXT, master_key);
+		(uint64_t)*enc_alg, hydro_pwhash_CONTEXT, master_key);
 }
 
 static int
 _hydro_pwhash_verify(uint8_t       computed_h[hydro_pwhash_HASHBYTES],
-					 const uint8_t stored[hydro_pwhash_STOREDBYTES], const char *passwd,
-					 size_t passwd_len, const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
-					 uint64_t opslimit_max, size_t memlimit_max, uint8_t threads_max)
-{
-	const uint8_t *const enc_alg   = &stored[0];
-	const uint8_t *const secretbox = &enc_alg[hydro_pwhash_ENC_ALGBYTES];
+	const uint8_t stored[hydro_pwhash_STOREDBYTES], const char* passwd,
+	size_t passwd_len, const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
+	uint64_t opslimit_max, size_t memlimit_max, uint8_t threads_max) {
+	const uint8_t* const enc_alg = &stored[0];
+	const uint8_t* const secretbox = &enc_alg[hydro_pwhash_ENC_ALGBYTES];
 
 	uint8_t        params[hydro_pwhash_PARAMSBYTES];
-	uint8_t *const hash_alg    = &params[0];
-	uint8_t *const threads_u8  = &hash_alg[hydro_pwhash_HASH_ALGBYTES];
-	uint8_t *const opslimit_u8 = &threads_u8[hydro_pwhash_THREADSBYTES];
-	uint8_t *const memlimit_u8 = &opslimit_u8[hydro_pwhash_OPSLIMITBYTES];
-	uint8_t *const salt        = &memlimit_u8[hydro_pwhash_MEMLIMITBYTES];
-	uint8_t *const h           = &salt[hydro_pwhash_SALTBYTES];
+	uint8_t* const hash_alg = &params[0];
+	uint8_t* const threads_u8 = &hash_alg[hydro_pwhash_HASH_ALGBYTES];
+	uint8_t* const opslimit_u8 = &threads_u8[hydro_pwhash_THREADSBYTES];
+	uint8_t* const memlimit_u8 = &opslimit_u8[hydro_pwhash_OPSLIMITBYTES];
+	uint8_t* const salt = &memlimit_u8[hydro_pwhash_MEMLIMITBYTES];
+	uint8_t* const h = &salt[hydro_pwhash_SALTBYTES];
 
 	uint64_t opslimit;
 	size_t   memlimit;
 	uint8_t  threads;
 
-	(void) memlimit;
+	(void)memlimit;
 	if (*enc_alg != hydro_pwhash_ENC_ALG) {
 		return -1;
 	}
 	if (hydro_secretbox_decrypt(params, secretbox,
-								hydro_secretbox_HEADERBYTES + hydro_pwhash_PARAMSBYTES,
-								(uint64_t) *enc_alg, hydro_pwhash_CONTEXT, master_key) != 0) {
+		hydro_secretbox_HEADERBYTES + hydro_pwhash_PARAMSBYTES,
+		(uint64_t)*enc_alg, hydro_pwhash_CONTEXT, master_key) != 0) {
 		return -1;
 	}
 	if (*hash_alg != hydro_pwhash_HASH_ALG || (opslimit = LOAD64_LE(opslimit_u8)) > opslimit_max ||
-		(memlimit = (size_t) LOAD64_LE(memlimit_u8)) > memlimit_max ||
+		(memlimit = (size_t)LOAD64_LE(memlimit_u8)) > memlimit_max ||
 		(threads = *threads_u8) > threads_max) {
 		return -1;
 	}
 	if (_hydro_pwhash_hash(computed_h, hydro_pwhash_HASHBYTES, salt, passwd, passwd_len,
-						   hydro_pwhash_CONTEXT, zero, opslimit, memlimit, threads) == 0 &&
+		hydro_pwhash_CONTEXT, zero, opslimit, memlimit, threads) == 0 &&
 		hydro_equal(computed_h, h, hydro_pwhash_HASHBYTES) == 1) {
 		return 0;
 	}
@@ -3663,31 +3509,29 @@ _hydro_pwhash_verify(uint8_t       computed_h[hydro_pwhash_HASHBYTES],
 }
 
 int
-hydro_pwhash_verify(const uint8_t stored[hydro_pwhash_STOREDBYTES], const char *passwd,
-					size_t passwd_len, const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
-					uint64_t opslimit_max, size_t memlimit_max, uint8_t threads_max)
-{
+hydro_pwhash_verify(const uint8_t stored[hydro_pwhash_STOREDBYTES], const char* passwd,
+	size_t passwd_len, const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
+	uint64_t opslimit_max, size_t memlimit_max, uint8_t threads_max) {
 	uint8_t computed_h[hydro_pwhash_HASHBYTES];
 	int     ret;
 
 	ret = _hydro_pwhash_verify(computed_h, stored, passwd, passwd_len, master_key, opslimit_max,
-							   memlimit_max, threads_max);
+		memlimit_max, threads_max);
 	hydro_memzero(computed_h, sizeof computed_h);
 
 	return ret;
 }
 
 int
-hydro_pwhash_derive_static_key(uint8_t *static_key, size_t static_key_len,
-							   const uint8_t stored[hydro_pwhash_STOREDBYTES], const char *passwd,
-							   size_t passwd_len, const char ctx[hydro_pwhash_CONTEXTBYTES],
-							   const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
-							   uint64_t opslimit_max, size_t memlimit_max, uint8_t threads_max)
-{
+hydro_pwhash_derive_static_key(uint8_t* static_key, size_t static_key_len,
+	const uint8_t stored[hydro_pwhash_STOREDBYTES], const char* passwd,
+	size_t passwd_len, const char ctx[hydro_pwhash_CONTEXTBYTES],
+	const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
+	uint64_t opslimit_max, size_t memlimit_max, uint8_t threads_max) {
 	uint8_t computed_h[hydro_pwhash_HASHBYTES];
 
 	if (_hydro_pwhash_verify(computed_h, stored, passwd, passwd_len, master_key, opslimit_max,
-							 memlimit_max, threads_max) != 0) {
+		memlimit_max, threads_max) != 0) {
 		hydro_memzero(computed_h, sizeof computed_h);
 		return -1;
 	}
@@ -3701,40 +3545,38 @@ hydro_pwhash_derive_static_key(uint8_t *static_key, size_t static_key_len,
 
 int
 hydro_pwhash_reencrypt(uint8_t       stored[hydro_pwhash_STOREDBYTES],
-					   const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
-					   const uint8_t new_master_key[hydro_pwhash_MASTERKEYBYTES])
-{
-	uint8_t *const enc_alg   = &stored[0];
-	uint8_t *const secretbox = &enc_alg[hydro_pwhash_ENC_ALGBYTES];
-	uint8_t *const params    = &secretbox[hydro_secretbox_HEADERBYTES];
+	const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES],
+	const uint8_t new_master_key[hydro_pwhash_MASTERKEYBYTES]) {
+	uint8_t* const enc_alg = &stored[0];
+	uint8_t* const secretbox = &enc_alg[hydro_pwhash_ENC_ALGBYTES];
+	uint8_t* const params = &secretbox[hydro_secretbox_HEADERBYTES];
 
 	if (*enc_alg != hydro_pwhash_ENC_ALG) {
 		return -1;
 	}
 	if (hydro_secretbox_decrypt(secretbox, secretbox,
-								hydro_secretbox_HEADERBYTES + hydro_pwhash_PARAMSBYTES,
-								(uint64_t) *enc_alg, hydro_pwhash_CONTEXT, master_key) != 0) {
+		hydro_secretbox_HEADERBYTES + hydro_pwhash_PARAMSBYTES,
+		(uint64_t)*enc_alg, hydro_pwhash_CONTEXT, master_key) != 0) {
 		return -1;
 	}
 	memmove(params, secretbox, hydro_pwhash_PARAMSBYTES);
-	return hydro_secretbox_encrypt(secretbox, params, hydro_pwhash_PARAMSBYTES, (uint64_t) *enc_alg,
-								   hydro_pwhash_CONTEXT, new_master_key);
+	return hydro_secretbox_encrypt(secretbox, params, hydro_pwhash_PARAMSBYTES, (uint64_t)*enc_alg,
+		hydro_pwhash_CONTEXT, new_master_key);
 }
 
 int
 hydro_pwhash_upgrade(uint8_t       stored[hydro_pwhash_STOREDBYTES],
-					 const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES], uint64_t opslimit,
-					 size_t memlimit, uint8_t threads)
-{
-	uint8_t *const enc_alg     = &stored[0];
-	uint8_t *const secretbox   = &enc_alg[hydro_pwhash_ENC_ALGBYTES];
-	uint8_t *const params      = &secretbox[hydro_secretbox_HEADERBYTES];
-	uint8_t *const hash_alg    = &params[0];
-	uint8_t *const threads_u8  = &hash_alg[hydro_pwhash_HASH_ALGBYTES];
-	uint8_t *const opslimit_u8 = &threads_u8[hydro_pwhash_THREADSBYTES];
-	uint8_t *const memlimit_u8 = &opslimit_u8[hydro_pwhash_OPSLIMITBYTES];
-	uint8_t *const salt        = &memlimit_u8[hydro_pwhash_MEMLIMITBYTES];
-	uint8_t *const h           = &salt[hydro_pwhash_SALTBYTES];
+	const uint8_t master_key[hydro_pwhash_MASTERKEYBYTES], uint64_t opslimit,
+	size_t memlimit, uint8_t threads) {
+	uint8_t* const enc_alg = &stored[0];
+	uint8_t* const secretbox = &enc_alg[hydro_pwhash_ENC_ALGBYTES];
+	uint8_t* const params = &secretbox[hydro_secretbox_HEADERBYTES];
+	uint8_t* const hash_alg = &params[0];
+	uint8_t* const threads_u8 = &hash_alg[hydro_pwhash_HASH_ALGBYTES];
+	uint8_t* const opslimit_u8 = &threads_u8[hydro_pwhash_THREADSBYTES];
+	uint8_t* const memlimit_u8 = &opslimit_u8[hydro_pwhash_OPSLIMITBYTES];
+	uint8_t* const salt = &memlimit_u8[hydro_pwhash_MEMLIMITBYTES];
+	uint8_t* const h = &salt[hydro_pwhash_SALTBYTES];
 
 	_hydro_attr_aligned_(16) uint8_t state[gimli_BLOCKBYTES];
 	uint64_t                         i;
@@ -3744,8 +3586,8 @@ hydro_pwhash_upgrade(uint8_t       stored[hydro_pwhash_STOREDBYTES],
 		return -1;
 	}
 	if (hydro_secretbox_decrypt(secretbox, secretbox,
-								hydro_secretbox_HEADERBYTES + hydro_pwhash_PARAMSBYTES,
-								(uint64_t) *enc_alg, hydro_pwhash_CONTEXT, master_key) != 0) {
+		hydro_secretbox_HEADERBYTES + hydro_pwhash_PARAMSBYTES,
+		(uint64_t)*enc_alg, hydro_pwhash_CONTEXT, master_key) != 0) {
 		return -1;
 	}
 	memmove(params, secretbox, hydro_pwhash_PARAMSBYTES);
@@ -3765,10 +3607,10 @@ hydro_pwhash_upgrade(uint8_t       stored[hydro_pwhash_STOREDBYTES],
 	memcpy(h, state + gimli_RATE, hydro_random_SEEDBYTES);
 	*threads_u8 = threads;
 	STORE64_LE(opslimit_u8, opslimit);
-	STORE64_LE(memlimit_u8, (uint64_t) memlimit);
+	STORE64_LE(memlimit_u8, (uint64_t)memlimit);
 
-	return hydro_secretbox_encrypt(secretbox, params, hydro_pwhash_PARAMSBYTES, (uint64_t) *enc_alg,
-								   hydro_pwhash_CONTEXT, master_key);
+	return hydro_secretbox_encrypt(secretbox, params, hydro_pwhash_PARAMSBYTES, (uint64_t)*enc_alg,
+		hydro_pwhash_CONTEXT, master_key);
 }
 
 
@@ -3778,8 +3620,7 @@ hydro_pwhash_upgrade(uint8_t       stored[hydro_pwhash_STOREDBYTES],
 
 static void
 hydro_sign_p2(uint8_t sig[hydro_x25519_BYTES], const uint8_t challenge[hydro_sign_CHALLENGEBYTES],
-			  const uint8_t eph_sk[hydro_x25519_BYTES], const uint8_t sk[hydro_x25519_BYTES])
-{
+	const uint8_t eph_sk[hydro_x25519_BYTES], const uint8_t sk[hydro_x25519_BYTES]) {
 	hydro_x25519_scalar_t scalar1, scalar2, scalar3;
 
 	COMPILER_ASSERT(hydro_sign_CHALLENGEBYTES == hydro_x25519_BYTES);
@@ -3794,13 +3635,12 @@ hydro_sign_p2(uint8_t sig[hydro_x25519_BYTES], const uint8_t challenge[hydro_sig
 
 static void
 hydro_sign_challenge(uint8_t       challenge[hydro_sign_CHALLENGEBYTES],
-					 const uint8_t nonce[hydro_sign_NONCEBYTES],
-					 const uint8_t pk[hydro_sign_PUBLICKEYBYTES],
-					 const uint8_t prehash[hydro_sign_PREHASHBYTES])
-{
+	const uint8_t nonce[hydro_sign_NONCEBYTES],
+	const uint8_t pk[hydro_sign_PUBLICKEYBYTES],
+	const uint8_t prehash[hydro_sign_PREHASHBYTES]) {
 	hydro_hash_state st;
 
-	hydro_hash_init(&st, (const char *) zero, NULL);
+	hydro_hash_init(&st, (const char*)zero, NULL);
 	hydro_hash_update(&st, nonce, hydro_sign_NONCEBYTES);
 	hydro_hash_update(&st, pk, hydro_sign_PUBLICKEYBYTES);
 	hydro_hash_update(&st, prehash, hydro_sign_PREHASHBYTES);
@@ -3809,18 +3649,17 @@ hydro_sign_challenge(uint8_t       challenge[hydro_sign_CHALLENGEBYTES],
 
 static int
 hydro_sign_prehash(uint8_t csig[hydro_sign_BYTES], const uint8_t prehash[hydro_sign_PREHASHBYTES],
-				   const uint8_t sk[hydro_sign_SECRETKEYBYTES])
-{
+	const uint8_t sk[hydro_sign_SECRETKEYBYTES]) {
 	hydro_hash_state st;
 	uint8_t          challenge[hydro_sign_CHALLENGEBYTES];
-	const uint8_t *  pk     = &sk[hydro_x25519_SECRETKEYBYTES];
-	uint8_t *        nonce  = &csig[0];
-	uint8_t *        sig    = &csig[hydro_sign_NONCEBYTES];
-	uint8_t *        eph_sk = sig;
+	const uint8_t* pk = &sk[hydro_x25519_SECRETKEYBYTES];
+	uint8_t* nonce = &csig[0];
+	uint8_t* sig = &csig[hydro_sign_NONCEBYTES];
+	uint8_t* eph_sk = sig;
 
 	hydro_random_buf(eph_sk, hydro_x25519_SECRETKEYBYTES);
 	COMPILER_ASSERT(hydro_x25519_SECRETKEYBYTES == hydro_hash_KEYBYTES);
-	hydro_hash_init(&st, (const char *) zero, sk);
+	hydro_hash_init(&st, (const char*)zero, sk);
 	hydro_hash_update(&st, eph_sk, hydro_x25519_SECRETKEYBYTES);
 	hydro_hash_update(&st, prehash, hydro_sign_PREHASHBYTES);
 	hydro_hash_final(&st, eph_sk, hydro_x25519_SECRETKEYBYTES);
@@ -3836,10 +3675,9 @@ hydro_sign_prehash(uint8_t csig[hydro_sign_BYTES], const uint8_t prehash[hydro_s
 }
 
 static int
-hydro_sign_verify_core(hydro_x25519_fe xs[5], const hydro_x25519_limb_t *other1,
-					   const uint8_t other2[hydro_x25519_BYTES])
-{
-	hydro_x25519_limb_t *     z2 = xs[1], *x3 = xs[2], *z3 = xs[3];
+hydro_sign_verify_core(hydro_x25519_fe xs[5], const hydro_x25519_limb_t* other1,
+	const uint8_t other2[hydro_x25519_BYTES]) {
+	hydro_x25519_limb_t* z2 = xs[1], * x3 = xs[2], * z3 = xs[3];
 	hydro_x25519_fe           xo2;
 	const hydro_x25519_limb_t sixteen = 16;
 
@@ -3868,10 +3706,9 @@ hydro_sign_verify_core(hydro_x25519_fe xs[5], const hydro_x25519_limb_t *other1,
 
 static int
 hydro_sign_verify_p2(const uint8_t sig[hydro_x25519_BYTES],
-					 const uint8_t challenge[hydro_sign_CHALLENGEBYTES],
-					 const uint8_t nonce[hydro_sign_NONCEBYTES],
-					 const uint8_t pk[hydro_x25519_BYTES])
-{
+	const uint8_t challenge[hydro_sign_CHALLENGEBYTES],
+	const uint8_t nonce[hydro_sign_NONCEBYTES],
+	const uint8_t pk[hydro_x25519_BYTES]) {
 	hydro_x25519_fe xs[7];
 
 	hydro_x25519_core(&xs[0], challenge, pk, 0);
@@ -3882,22 +3719,20 @@ hydro_sign_verify_p2(const uint8_t sig[hydro_x25519_BYTES],
 
 static int
 hydro_sign_verify_challenge(const uint8_t csig[hydro_sign_BYTES],
-							const uint8_t challenge[hydro_sign_CHALLENGEBYTES],
-							const uint8_t pk[hydro_sign_PUBLICKEYBYTES])
-{
-	const uint8_t *nonce = &csig[0];
-	const uint8_t *sig   = &csig[hydro_sign_NONCEBYTES];
+	const uint8_t challenge[hydro_sign_CHALLENGEBYTES],
+	const uint8_t pk[hydro_sign_PUBLICKEYBYTES]) {
+	const uint8_t* nonce = &csig[0];
+	const uint8_t* sig = &csig[hydro_sign_NONCEBYTES];
 
 	return hydro_sign_verify_p2(sig, challenge, nonce, pk);
 }
 
 void
-hydro_sign_keygen(hydro_sign_keypair *kp)
-{
-	uint8_t *pk_copy = &kp->sk[hydro_x25519_SECRETKEYBYTES];
+hydro_sign_keygen(hydro_sign_keypair* kp) {
+	uint8_t* pk_copy = &kp->sk[hydro_x25519_SECRETKEYBYTES];
 
 	COMPILER_ASSERT(hydro_sign_SECRETKEYBYTES ==
-					hydro_x25519_SECRETKEYBYTES + hydro_x25519_PUBLICKEYBYTES);
+		hydro_x25519_SECRETKEYBYTES + hydro_x25519_PUBLICKEYBYTES);
 	COMPILER_ASSERT(hydro_sign_PUBLICKEYBYTES == hydro_x25519_PUBLICKEYBYTES);
 	hydro_random_buf(kp->sk, hydro_x25519_SECRETKEYBYTES);
 	hydro_x25519_scalarmult_base_uniform(kp->pk, kp->sk);
@@ -3905,9 +3740,8 @@ hydro_sign_keygen(hydro_sign_keypair *kp)
 }
 
 void
-hydro_sign_keygen_deterministic(hydro_sign_keypair *kp, const uint8_t seed[hydro_sign_SEEDBYTES])
-{
-	uint8_t *pk_copy = &kp->sk[hydro_x25519_SECRETKEYBYTES];
+hydro_sign_keygen_deterministic(hydro_sign_keypair* kp, const uint8_t seed[hydro_sign_SEEDBYTES]) {
+	uint8_t* pk_copy = &kp->sk[hydro_x25519_SECRETKEYBYTES];
 
 	COMPILER_ASSERT(hydro_sign_SEEDBYTES >= hydro_random_SEEDBYTES);
 	hydro_random_buf_deterministic(kp->sk, hydro_x25519_SECRETKEYBYTES, seed);
@@ -3916,21 +3750,18 @@ hydro_sign_keygen_deterministic(hydro_sign_keypair *kp, const uint8_t seed[hydro
 }
 
 int
-hydro_sign_init(hydro_sign_state *state, const char ctx[hydro_sign_CONTEXTBYTES])
-{
+hydro_sign_init(hydro_sign_state* state, const char ctx[hydro_sign_CONTEXTBYTES]) {
 	return hydro_hash_init(&state->hash_st, ctx, NULL);
 }
 
 int
-hydro_sign_update(hydro_sign_state *state, const void *m_, size_t mlen)
-{
+hydro_sign_update(hydro_sign_state* state, const void* m_, size_t mlen) {
 	return hydro_hash_update(&state->hash_st, m_, mlen);
 }
 
 int
-hydro_sign_final_create(hydro_sign_state *state, uint8_t csig[hydro_sign_BYTES],
-						const uint8_t sk[hydro_sign_SECRETKEYBYTES])
-{
+hydro_sign_final_create(hydro_sign_state* state, uint8_t csig[hydro_sign_BYTES],
+	const uint8_t sk[hydro_sign_SECRETKEYBYTES]) {
 	uint8_t prehash[hydro_sign_PREHASHBYTES];
 
 	hydro_hash_final(&state->hash_st, prehash, sizeof prehash);
@@ -3939,12 +3770,11 @@ hydro_sign_final_create(hydro_sign_state *state, uint8_t csig[hydro_sign_BYTES],
 }
 
 int
-hydro_sign_final_verify(hydro_sign_state *state, const uint8_t csig[hydro_sign_BYTES],
-						const uint8_t pk[hydro_sign_PUBLICKEYBYTES])
-{
+hydro_sign_final_verify(hydro_sign_state* state, const uint8_t csig[hydro_sign_BYTES],
+	const uint8_t pk[hydro_sign_PUBLICKEYBYTES]) {
 	uint8_t        challenge[hydro_sign_CHALLENGEBYTES];
 	uint8_t        prehash[hydro_sign_PREHASHBYTES];
-	const uint8_t *nonce = &csig[0];
+	const uint8_t* nonce = &csig[0];
 
 	hydro_hash_final(&state->hash_st, prehash, sizeof prehash);
 	hydro_sign_challenge(challenge, nonce, pk, prehash);
@@ -3953,10 +3783,9 @@ hydro_sign_final_verify(hydro_sign_state *state, const uint8_t csig[hydro_sign_B
 }
 
 int
-hydro_sign_create(uint8_t csig[hydro_sign_BYTES], const void *m_, size_t mlen,
-				  const char    ctx[hydro_sign_CONTEXTBYTES],
-				  const uint8_t sk[hydro_sign_SECRETKEYBYTES])
-{
+hydro_sign_create(uint8_t csig[hydro_sign_BYTES], const void* m_, size_t mlen,
+	const char    ctx[hydro_sign_CONTEXTBYTES],
+	const uint8_t sk[hydro_sign_SECRETKEYBYTES]) {
 	hydro_sign_state st;
 
 	if (hydro_sign_init(&st, ctx) != 0 || hydro_sign_update(&st, m_, mlen) != 0 ||
@@ -3967,10 +3796,9 @@ hydro_sign_create(uint8_t csig[hydro_sign_BYTES], const void *m_, size_t mlen,
 }
 
 int
-hydro_sign_verify(const uint8_t csig[hydro_sign_BYTES], const void *m_, size_t mlen,
-				  const char    ctx[hydro_sign_CONTEXTBYTES],
-				  const uint8_t pk[hydro_sign_PUBLICKEYBYTES])
-{
+hydro_sign_verify(const uint8_t csig[hydro_sign_BYTES], const void* m_, size_t mlen,
+	const char    ctx[hydro_sign_CONTEXTBYTES],
+	const uint8_t pk[hydro_sign_PUBLICKEYBYTES]) {
 	hydro_sign_state st;
 
 	if (hydro_sign_init(&st, ctx) != 0 || hydro_sign_update(&st, m_, mlen) != 0 ||
@@ -4015,8 +3843,7 @@ hydro_sign_verify(const uint8_t csig[hydro_sign_BYTES], const void *m_, size_t m
 #define CN_PROTOCOL_CHALLENGE_DATA_SIZE 256
 #define CN_PROTOCOL_REDUNDANT_DISCONNECT_PACKET_COUNT 10
 
-typedef enum cn_protocol_packet_type_t
-{
+typedef enum cn_protocol_packet_type_t {
 	CN_PROTOCOL_PACKET_TYPE_CONNECT_TOKEN,
 	CN_PROTOCOL_PACKET_TYPE_CONNECTION_ACCEPTED,
 	CN_PROTOCOL_PACKET_TYPE_CONNECTION_DENIED,
@@ -4032,48 +3859,41 @@ typedef enum cn_protocol_packet_type_t
 typedef struct cn_protocol_packet_allocator_t cn_protocol_packet_allocator_t;
 typedef struct cn_protocol_client_t cn_protocol_client_t;
 
-typedef enum cn_protocol_client_state_t
-{
-	CN_PROTOCOL_CLIENT_STATE_CONNECT_TOKEN_EXPIRED         = -6,
-	CN_PROTOCOL_CLIENT_STATE_INVALID_CONNECT_TOKEN         = -5,
-	CN_PROTOCOL_CLIENT_STATE_CONNECTION_TIMED_OUT          = -4,
+typedef enum cn_protocol_client_state_t {
+	CN_PROTOCOL_CLIENT_STATE_CONNECT_TOKEN_EXPIRED = -6,
+	CN_PROTOCOL_CLIENT_STATE_INVALID_CONNECT_TOKEN = -5,
+	CN_PROTOCOL_CLIENT_STATE_CONNECTION_TIMED_OUT = -4,
 	CN_PROTOCOL_CLIENT_STATE_CHALLENGED_RESPONSE_TIMED_OUT = -3,
-	CN_PROTOCOL_CLIENT_STATE_CONNECTION_REQUEST_TIMED_OUT  = -2,
-	CN_PROTOCOL_CLIENT_STATE_CONNECTION_DENIED             = -1,
-	CN_PROTOCOL_CLIENT_STATE_DISCONNECTED                  =  0,
-	CN_PROTOCOL_CLIENT_STATE_SENDING_CONNECTION_REQUEST    =  1,
-	CN_PROTOCOL_CLIENT_STATE_SENDING_CHALLENGE_RESPONSE    =  2,
-	CN_PROTOCOL_CLIENT_STATE_CONNECTED                     =  3,
+	CN_PROTOCOL_CLIENT_STATE_CONNECTION_REQUEST_TIMED_OUT = -2,
+	CN_PROTOCOL_CLIENT_STATE_CONNECTION_DENIED = -1,
+	CN_PROTOCOL_CLIENT_STATE_DISCONNECTED = 0,
+	CN_PROTOCOL_CLIENT_STATE_SENDING_CONNECTION_REQUEST = 1,
+	CN_PROTOCOL_CLIENT_STATE_SENDING_CHALLENGE_RESPONSE = 2,
+	CN_PROTOCOL_CLIENT_STATE_CONNECTED = 3,
 } cn_protocol_client_state_t;
 
 typedef struct cn_protocol_server_t cn_protocol_server_t;
 
-typedef enum cn_protocol_server_event_type_t
-{
+typedef enum cn_protocol_server_event_type_t {
 	CN_PROTOCOL_SERVER_EVENT_NEW_CONNECTION,
 	CN_PROTOCOL_SERVER_EVENT_DISCONNECTED,
 	CN_PROTOCOL_SERVER_EVENT_PAYLOAD_PACKET,
 } cn_protocol_server_event_type_t;
 
-typedef struct cn_protocol_server_event_t
-{
+typedef struct cn_protocol_server_event_t {
 	cn_protocol_server_event_type_t type;
-	union
-	{
-		struct
-		{
+	union {
+		struct {
 			int client_index;
 			uint64_t client_id;
 			cn_endpoint_t endpoint;
 		} new_connection;
 
-		struct
-		{
+		struct {
 			int client_index;
 		} disconnected;
 
-		struct
-		{
+		struct {
 			int client_index;
 			void* data;
 			int size;
@@ -4081,32 +3901,27 @@ typedef struct cn_protocol_server_event_t
 	} u;
 } cn_protocol_server_event_t;
 
-void cn_write_uint8(uint8_t** p, uint8_t value)
-{
+void cn_write_uint8(uint8_t** p, uint8_t value) {
 	**p = value;
 	++(*p);
 }
 
-void cn_write_uint16(uint8_t** p, uint16_t value)
-{
+void cn_write_uint16(uint8_t** p, uint16_t value) {
 	(*p)[0] = value & 0xFF;
 	(*p)[1] = value >> 8;
 	*p += 2;
 }
 
-void cn_write_uint32(uint8_t** p, uint32_t value)
-{
+void cn_write_uint32(uint8_t** p, uint32_t value) {
 	(*p)[0] = value & 0xFF;
-	(*p)[1] = (value >> 8 ) & 0xFF;
+	(*p)[1] = (value >> 8) & 0xFF;
 	(*p)[2] = (value >> 16) & 0xFF;
 	(*p)[3] = value >> 24;
 	*p += 4;
 }
 
-void cn_write_float(uint8_t** p, float value)
-{
-	union
-	{
+void cn_write_float(uint8_t** p, float value) {
+	union {
 		uint32_t as_uint32;
 		float as_float;
 	} val;
@@ -4114,10 +3929,9 @@ void cn_write_float(uint8_t** p, float value)
 	cn_write_uint32(p, val.as_uint32);
 }
 
-void cn_write_uint64(uint8_t** p, uint64_t value)
-{
+void cn_write_uint64(uint8_t** p, uint64_t value) {
 	(*p)[0] = value & 0xFF;
-	(*p)[1] = (value >> 8 ) & 0xFF;
+	(*p)[1] = (value >> 8) & 0xFF;
 	(*p)[2] = (value >> 16) & 0xFF;
 	(*p)[3] = (value >> 24) & 0xFF;
 	(*p)[4] = (value >> 32) & 0xFF;
@@ -4127,16 +3941,13 @@ void cn_write_uint64(uint8_t** p, uint64_t value)
 	*p += 8;
 }
 
-void cn_write_bytes(uint8_t** p, const uint8_t* byte_array, int num_bytes)
-{
-	for (int i = 0; i < num_bytes; ++i)
-	{
+void cn_write_bytes(uint8_t** p, const uint8_t* byte_array, int num_bytes) {
+	for (int i = 0; i < num_bytes; ++i) {
 		cn_write_uint8(p, byte_array[i]);
 	}
 }
 
-void cn_write_endpoint(uint8_t** p, cn_endpoint_t endpoint)
-{
+void cn_write_endpoint(uint8_t** p, cn_endpoint_t endpoint) {
 	cn_write_uint8(p, (uint8_t)endpoint.type);
 	if (endpoint.type == CN_ADDRESS_TYPE_IPV4) {
 		cn_write_uint8(p, endpoint.u.ipv4[0]);
@@ -4158,28 +3969,24 @@ void cn_write_endpoint(uint8_t** p, cn_endpoint_t endpoint)
 	cn_write_uint16(p, endpoint.port);
 }
 
-void cn_write_key(uint8_t** p, const cn_crypto_key_t* key)
-{
+void cn_write_key(uint8_t** p, const cn_crypto_key_t* key) {
 	cn_write_bytes(p, (const uint8_t*)key, sizeof(*key));
 }
 
-void cn_write_fourcc(uint8_t** p, const char* fourcc)
-{
+void cn_write_fourcc(uint8_t** p, const char* fourcc) {
 	cn_write_uint8(p, fourcc[0]);
 	cn_write_uint8(p, fourcc[1]);
 	cn_write_uint8(p, fourcc[2]);
 	cn_write_uint8(p, fourcc[3]);
 }
 
-CN_INLINE uint8_t cn_read_uint8(uint8_t** p)
-{
+CN_INLINE uint8_t cn_read_uint8(uint8_t** p) {
 	uint8_t value = **p;
 	++(*p);
 	return value;
 }
 
-CN_INLINE uint16_t cn_read_uint16(uint8_t** p)
-{
+CN_INLINE uint16_t cn_read_uint16(uint8_t** p) {
 	uint16_t value;
 	value = (*p)[0];
 	value |= (((uint16_t)((*p)[1])) << 8);
@@ -4187,10 +3994,9 @@ CN_INLINE uint16_t cn_read_uint16(uint8_t** p)
 	return value;
 }
 
-CN_INLINE uint32_t cn_read_uint32(uint8_t** p)
-{
+CN_INLINE uint32_t cn_read_uint32(uint8_t** p) {
 	uint32_t value;
-	value  = (*p)[0];
+	value = (*p)[0];
 	value |= (((uint32_t)((*p)[1])) << 8);
 	value |= (((uint32_t)((*p)[2])) << 16);
 	value |= (((uint32_t)((*p)[3])) << 24);
@@ -4198,10 +4004,8 @@ CN_INLINE uint32_t cn_read_uint32(uint8_t** p)
 	return value;
 }
 
-CN_INLINE float cn_read_float(uint8_t** p)
-{
-	union
-	{
+CN_INLINE float cn_read_float(uint8_t** p) {
+	union {
 		uint32_t as_uint32;
 		float as_float;
 	} val;
@@ -4209,11 +4013,10 @@ CN_INLINE float cn_read_float(uint8_t** p)
 	return val.as_float;
 }
 
-CN_INLINE uint64_t cn_read_uint64(uint8_t** p)
-{
+CN_INLINE uint64_t cn_read_uint64(uint8_t** p) {
 	uint64_t value;
-	value  = (*p)[0];
-	value |= (((uint64_t)((*p)[1])) << 8 );
+	value = (*p)[0];
+	value |= (((uint64_t)((*p)[1])) << 8);
 	value |= (((uint64_t)((*p)[2])) << 16);
 	value |= (((uint64_t)((*p)[3])) << 24);
 	value |= (((uint64_t)((*p)[4])) << 32);
@@ -4224,16 +4027,13 @@ CN_INLINE uint64_t cn_read_uint64(uint8_t** p)
 	return value;
 }
 
-CN_INLINE void cn_read_bytes(uint8_t** p, uint8_t* byte_array, int num_bytes)
-{
-	for (int i = 0; i < num_bytes; ++i)
-	{
+CN_INLINE void cn_read_bytes(uint8_t** p, uint8_t* byte_array, int num_bytes) {
+	for (int i = 0; i < num_bytes; ++i) {
 		byte_array[i] = cn_read_uint8(p);
 	}
 }
 
-CN_INLINE cn_endpoint_t cn_read_endpoint(uint8_t** p)
-{
+cn_endpoint_t cn_read_endpoint(uint8_t** p) {
 	cn_endpoint_t endpoint;
 	endpoint.type = (cn_address_type_t)cn_read_uint8(p);
 	if (endpoint.type == CN_ADDRESS_TYPE_IPV4) {
@@ -4257,31 +4057,27 @@ CN_INLINE cn_endpoint_t cn_read_endpoint(uint8_t** p)
 	return endpoint;
 }
 
-CN_INLINE cn_crypto_key_t cn_read_key(uint8_t** p)
-{
+CN_INLINE cn_crypto_key_t cn_read_key(uint8_t** p) {
 	cn_crypto_key_t key;
 	cn_read_bytes(p, (uint8_t*)&key, sizeof(key));
 	return key;
 }
 
-CN_INLINE void cn_read_fourcc(uint8_t** p, uint8_t* fourcc)
-{
+CN_INLINE void cn_read_fourcc(uint8_t** p, uint8_t* fourcc) {
 	fourcc[0] = cn_read_uint8(p);
 	fourcc[1] = cn_read_uint8(p);
 	fourcc[2] = cn_read_uint8(p);
 	fourcc[3] = cn_read_uint8(p);
 }
 
-typedef struct cn_protocol_replay_buffer_t
-{
+typedef struct cn_protocol_replay_buffer_t {
 	uint64_t max;
 	uint64_t entries[CN_PROTOCOL_REPLAY_BUFFER_SIZE];
 } cn_protocol_replay_buffer_t;
 
 // -------------------------------------------------------------------------------------------------
 
-typedef struct cn_protocol_packet_connect_token_t
-{
+typedef struct cn_protocol_packet_connect_token_t {
 	uint8_t packet_type;
 	uint64_t expiration_timestamp;
 	uint32_t handshake_timeout;
@@ -4289,38 +4085,32 @@ typedef struct cn_protocol_packet_connect_token_t
 	cn_endpoint_t endpoints[CN_PROTOCOL_CONNECT_TOKEN_ENDPOINT_MAX];
 } cn_protocol_packet_connect_token_t;
 
-typedef struct cn_protocol_packet_connection_accepted_t
-{
+typedef struct cn_protocol_packet_connection_accepted_t {
 	uint8_t packet_type;
 	uint64_t client_id;
 	uint32_t max_clients;
 	uint32_t connection_timeout;
 } cn_protocol_packet_connection_accepted_t;
 
-typedef struct cn_protocol_packet_connection_denied_t
-{
+typedef struct cn_protocol_packet_connection_denied_t {
 	uint8_t packet_type;
 } cn_protocol_packet_connection_denied_t;
 
-typedef struct cn_protocol_packet_keepalive_t
-{
+typedef struct cn_protocol_packet_keepalive_t {
 	uint8_t packet_type;
 } cn_protocol_packet_keepalive_t;
 
-typedef struct cn_protocol_packet_disconnect_t
-{
+typedef struct cn_protocol_packet_disconnect_t {
 	uint8_t packet_type;
 } cn_protocol_packet_disconnect_t;
 
-typedef struct cn_protocol_packet_challenge_t
-{
+typedef struct cn_protocol_packet_challenge_t {
 	uint8_t packet_type;
 	uint64_t challenge_nonce;
 	uint8_t challenge_data[CN_PROTOCOL_CHALLENGE_DATA_SIZE];
 } cn_protocol_packet_challenge_t;
 
-typedef struct cn_protocol_packet_payload_t
-{
+typedef struct cn_protocol_packet_payload_t {
 	uint8_t packet_type;
 	uint16_t payload_size;
 	uint8_t payload[CN_PROTOCOL_PACKET_PAYLOAD_MAX];
@@ -4328,8 +4118,7 @@ typedef struct cn_protocol_packet_payload_t
 
 // -------------------------------------------------------------------------------------------------
 
-typedef struct cn_protocol_connect_token_t
-{
+typedef struct cn_protocol_connect_token_t {
 	uint64_t creation_timestamp;
 	cn_crypto_key_t client_to_server_key;
 	cn_crypto_key_t server_to_client_key;
@@ -4340,8 +4129,7 @@ typedef struct cn_protocol_connect_token_t
 	cn_endpoint_t endpoints[CN_PROTOCOL_CONNECT_TOKEN_ENDPOINT_MAX];
 } cn_protocol_connect_token_t;
 
-typedef struct cn_protocol_connect_token_decrypted_t
-{
+typedef struct cn_protocol_connect_token_decrypted_t {
 	uint64_t expiration_timestamp;
 	uint32_t handshake_timeout;
 	uint16_t endpoint_count;
@@ -4359,15 +4147,13 @@ typedef struct cn_protocol_connect_token_decrypted_t
 #define CN_HASHTABLE_KEY_BYTES (hydro_hash_KEYBYTES)
 #define CN_HASHTABLE_HASH_BYTES (hydro_hash_BYTES)
 
-typedef struct cn_hashtable_slot_t
-{
+typedef struct cn_hashtable_slot_t {
 	uint64_t key_hash;
 	int item_index;
 	int base_count;
 } cn_hashtable_slot_t;
 
-typedef struct cn_hashtable_t
-{
+typedef struct cn_hashtable_t {
 	int count;
 	int slot_capacity;
 	cn_hashtable_slot_t* slots;
@@ -4390,14 +4176,12 @@ typedef struct cn_hashtable_t
 
 typedef struct cn_list_node_t cn_list_node_t;
 
-struct cn_list_node_t
-{
+struct cn_list_node_t {
 	cn_list_node_t* next;
 	cn_list_node_t* prev;
 };
 
-typedef struct cn_list_t
-{
+typedef struct cn_list_t {
 	cn_list_node_t nodes;
 } cn_list_t;
 
@@ -4405,76 +4189,64 @@ typedef struct cn_list_t
 #define CN_LIST_NODE(T, member, ptr) ((cn_list_node_t*)((uintptr_t)ptr + CN_OFFSET_OF(T, member)))
 #define CN_LIST_HOST(T, member, ptr) ((T*)((uintptr_t)ptr - CN_OFFSET_OF(T, member)))
 
-CN_INLINE void cn_list_init_node(cn_list_node_t* node)
-{
+CN_INLINE void cn_list_init_node(cn_list_node_t* node) {
 	node->next = node;
 	node->prev = node;
 }
 
-CN_INLINE void cn_list_init(cn_list_t* list)
-{
+CN_INLINE void cn_list_init(cn_list_t* list) {
 	cn_list_init_node(&list->nodes);
 }
 
-CN_INLINE void cn_list_push_front(cn_list_t* list, cn_list_node_t* node)
-{
+CN_INLINE void cn_list_push_front(cn_list_t* list, cn_list_node_t* node) {
 	node->next = list->nodes.next;
 	node->prev = &list->nodes;
 	list->nodes.next->prev = node;
 	list->nodes.next = node;
 }
 
-CN_INLINE void cn_list_push_back(cn_list_t* list, cn_list_node_t* node)
-{
+CN_INLINE void cn_list_push_back(cn_list_t* list, cn_list_node_t* node) {
 	node->prev = list->nodes.prev;
 	node->next = &list->nodes;
 	list->nodes.prev->next = node;
 	list->nodes.prev = node;
 }
 
-CN_INLINE void cn_list_remove(cn_list_node_t* node)
-{
+CN_INLINE void cn_list_remove(cn_list_node_t* node) {
 	node->prev->next = node->next;
 	node->next->prev = node->prev;
 	cn_list_init_node(node);
 }
 
-CN_INLINE cn_list_node_t* cn_list_pop_front(cn_list_t* list)
-{
+CN_INLINE cn_list_node_t* cn_list_pop_front(cn_list_t* list) {
 	cn_list_node_t* node = list->nodes.next;
 	cn_list_remove(node);
 	return node;
 }
 
-CN_INLINE cn_list_node_t* cn_list_pop_back(cn_list_t* list)
-{
+CN_INLINE cn_list_node_t* cn_list_pop_back(cn_list_t* list) {
 	cn_list_node_t* node = list->nodes.prev;
 	cn_list_remove(node);
 	return node;
 }
 
-CN_INLINE int cn_list_empty(cn_list_t* list)
-{
+CN_INLINE int cn_list_empty(cn_list_t* list) {
 	return list->nodes.next == list->nodes.prev && list->nodes.next == &list->nodes;
 }
 
-CN_INLINE cn_list_node_t* cn_list_begin(cn_list_t* list)
-{
+CN_INLINE cn_list_node_t* cn_list_begin(cn_list_t* list) {
 	return list->nodes.next;
 }
 
-CN_INLINE cn_list_node_t* cn_list_end(cn_list_t* list)
-{
+CN_INLINE cn_list_node_t* cn_list_end(cn_list_t* list) {
 	return &list->nodes;
 }
 
-CN_INLINE cn_list_node_t* cn_list_front(cn_list_t* list)
-{
+CN_INLINE cn_list_node_t* cn_list_front(cn_list_t* list) {
 	return list->nodes.next;
 }
 
-CN_INLINE cn_list_node_t* cn_list_back(cn_list_t* list)
-{
+CN_INLINE cn_list_node_t* cn_list_back(cn_list_t* list) {
 	return list->nodes.prev;
 }
 
@@ -4482,19 +4254,16 @@ CN_INLINE cn_list_node_t* cn_list_back(cn_list_t* list)
 
 #define CN_PROTOCOL_CONNECT_TOKEN_ENTRIES_MAX (CN_PROTOCOL_SERVER_MAX_CLIENTS * 8)
 
-typedef struct cn_protocol_connect_token_cache_entry_t
-{
+typedef struct cn_protocol_connect_token_cache_entry_t {
 	cn_list_node_t* node;
 } cn_protocol_connect_token_cache_entry_t;
 
-typedef struct cn_protocol_connect_token_cache_node_t
-{
+typedef struct cn_protocol_connect_token_cache_node_t {
 	cn_crypto_signature_t signature;
 	cn_list_node_t node;
 } cn_protocol_connect_token_cache_node_t;
 
-typedef struct cn_protocol_connect_token_cache_t
-{
+typedef struct cn_protocol_connect_token_cache_t {
 	int capacity;
 	cn_hashtable_t table;
 	cn_list_t list;
@@ -4507,8 +4276,7 @@ typedef struct cn_protocol_connect_token_cache_t
 
 #define CN_PROTOCOL_ENCRYPTION_STATES_MAX (CN_PROTOCOL_SERVER_MAX_CLIENTS * 2)
 
-typedef struct cn_protocol_encryption_state_t
-{
+typedef struct cn_protocol_encryption_state_t {
 	uint64_t sequence;
 	uint64_t expiration_timestamp;
 	uint32_t handshake_timeout;
@@ -4520,15 +4288,13 @@ typedef struct cn_protocol_encryption_state_t
 	cn_crypto_signature_t signature;
 } cn_protocol_encryption_state_t;
 
-typedef struct cn_protocol_encryption_map_t
-{
+typedef struct cn_protocol_encryption_map_t {
 	cn_hashtable_t table;
 } cn_protocol_encryption_map_t;
 
 // -------------------------------------------------------------------------------------------------
 
-typedef struct cn_circular_buffer_t
-{
+typedef struct cn_circular_buffer_t {
 	int index0;
 	int index1;
 	int size_left;
@@ -4537,8 +4303,7 @@ typedef struct cn_circular_buffer_t
 	void* user_allocator_context;
 } cn_circular_buffer_t;
 
-cn_circular_buffer_t cn_circular_buffer_create(int initial_size_in_bytes, void* user_allocator_context)
-{
+cn_circular_buffer_t cn_circular_buffer_create(int initial_size_in_bytes, void* user_allocator_context) {
 	cn_circular_buffer_t buffer;
 	buffer.index0 = 0;
 	buffer.index1 = 0;
@@ -4549,21 +4314,18 @@ cn_circular_buffer_t cn_circular_buffer_create(int initial_size_in_bytes, void* 
 	return buffer;
 }
 
-void cn_circular_buffer_free(cn_circular_buffer_t* buffer)
-{
+void cn_circular_buffer_free(cn_circular_buffer_t* buffer) {
 	CN_FREE(buffer->data, buffer->user_allocator_context);
 	CN_MEMSET(buffer, 0, sizeof(*buffer));
 }
 
-void cn_circular_buffer_reset(cn_circular_buffer_t* buffer)
-{
+void cn_circular_buffer_reset(cn_circular_buffer_t* buffer) {
 	buffer->index0 = 0;
 	buffer->index1 = 0;
 	buffer->size_left = buffer->capacity;
 }
 
-int cn_circular_buffer_push(cn_circular_buffer_t* buffer, const void* data, int size)
-{
+int cn_circular_buffer_push(cn_circular_buffer_t* buffer, const void* data, int size) {
 	if (buffer->size_left < size) {
 		return -1;
 	}
@@ -4583,8 +4345,7 @@ int cn_circular_buffer_push(cn_circular_buffer_t* buffer, const void* data, int 
 	return 0;
 }
 
-int cn_circular_buffer_pull(cn_circular_buffer_t* buffer, void* data, int size)
-{
+int cn_circular_buffer_pull(cn_circular_buffer_t* buffer, void* data, int size) {
 	if (buffer->capacity - buffer->size_left < size) {
 		return -1;
 	}
@@ -4604,8 +4365,7 @@ int cn_circular_buffer_pull(cn_circular_buffer_t* buffer, void* data, int size)
 	return 0;
 }
 
-int cn_circular_buffer_grow(cn_circular_buffer_t* buffer, int new_size_in_bytes)
-{
+int cn_circular_buffer_grow(cn_circular_buffer_t* buffer, int new_size_in_bytes) {
 	uint8_t* old_data = buffer->data;
 	uint8_t* new_data = (uint8_t*)CN_ALLOC(new_size_in_bytes, buffer->user_allocator_context);
 	if (!new_data) return -1;
@@ -4634,7 +4394,7 @@ int cn_circular_buffer_grow(cn_circular_buffer_t* buffer, int new_size_in_bytes)
 #ifdef CN_WINDOWS
 #	include <ws2tcpip.h>   // WSA stuff
 #	include <winsock2.h>   // socket
-#	pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "ws2_32.lib")
 #else
 #	include <sys/socket.h> // socket
 #	include <fcntl.h>      // fcntl
@@ -4643,12 +4403,10 @@ int cn_circular_buffer_grow(cn_circular_buffer_t* buffer, int new_size_in_bytes)
 #	include <errno.h>
 #endif
 
-static char* s_parse_ipv6_for_port(cn_endpoint_t* endpoint, char* str, int len)
-{
+static char* s_parse_ipv6_for_port(cn_endpoint_t* endpoint, char* str, int len) {
 	if (*str == '[') {
 		int base_index = len - 1;
-		for (int i = 0; i < 6; ++i)
-		{
+		for (int i = 0; i < 6; ++i) {
 			int index = base_index - i;
 			if (index < 3) return NULL;
 			if (str[index] == ':') {
@@ -4663,12 +4421,10 @@ static char* s_parse_ipv6_for_port(cn_endpoint_t* endpoint, char* str, int len)
 	return str;
 }
 
-static int s_parse_ipv4_for_port(cn_endpoint_t* endpoint, char* str)
-{
+static int s_parse_ipv4_for_port(cn_endpoint_t* endpoint, char* str) {
 	int len = (int)CN_STRLEN(str);
 	int base_index = len - 1;
-	for (int i = 0; i < 6; ++i)
-	{
+	for (int i = 0; i < 6; ++i) {
 		int index = base_index - i;
 		if (index < 0) break;
 		if (str[index] == ':') {
@@ -4681,8 +4437,7 @@ static int s_parse_ipv4_for_port(cn_endpoint_t* endpoint, char* str)
 
 #define CN_ENDPOINT_STRING_MAX_LENGTH INET6_ADDRSTRLEN
 
-int cn_endpoint_init(cn_endpoint_t* endpoint, const char* address_and_port_string)
-{
+int cn_endpoint_init(cn_endpoint_t* endpoint, const char* address_and_port_string) {
 	CN_ASSERT(address_and_port_string);
 	CN_MEMSET(endpoint, 0, sizeof(*endpoint));
 
@@ -4696,12 +4451,10 @@ int cn_endpoint_init(cn_endpoint_t* endpoint, const char* address_and_port_strin
 	str = s_parse_ipv6_for_port(endpoint, str, len);
 
 	struct in6_addr sockaddr6;
-	if (inet_pton(AF_INET6, str, &sockaddr6) == 1)
-	{
+	if (inet_pton(AF_INET6, str, &sockaddr6) == 1) {
 		endpoint->type = CN_ADDRESS_TYPE_IPV6;
 		int i;
-		for (i = 0; i < 8; ++i)
-		{
+		for (i = 0; i < 8; ++i) {
 			endpoint->u.ipv6[i] = ntohs(((uint16_t*)&sockaddr6)[i]);
 		}
 		return 0;
@@ -4710,21 +4463,19 @@ int cn_endpoint_init(cn_endpoint_t* endpoint, const char* address_and_port_strin
 	len = s_parse_ipv4_for_port(endpoint, str);
 
 	struct sockaddr_in sockaddr4;
-	if (inet_pton(AF_INET, str, &sockaddr4.sin_addr) == 1)
-	{
+	if (inet_pton(AF_INET, str, &sockaddr4.sin_addr) == 1) {
 		endpoint->type = CN_ADDRESS_TYPE_IPV4;
 		endpoint->u.ipv4[3] = (uint8_t)((sockaddr4.sin_addr.s_addr & 0xFF000000) >> 24);
 		endpoint->u.ipv4[2] = (uint8_t)((sockaddr4.sin_addr.s_addr & 0x00FF0000) >> 16);
-		endpoint->u.ipv4[1] = (uint8_t)((sockaddr4.sin_addr.s_addr & 0x0000FF00) >> 8 );
-		endpoint->u.ipv4[0] = (uint8_t)((sockaddr4.sin_addr.s_addr & 0x000000FF)      );
+		endpoint->u.ipv4[1] = (uint8_t)((sockaddr4.sin_addr.s_addr & 0x0000FF00) >> 8);
+		endpoint->u.ipv4[0] = (uint8_t)((sockaddr4.sin_addr.s_addr & 0x000000FF));
 		return 0;
 	}
 
 	return -1;
 }
 
-void cn_endpoint_to_string(cn_endpoint_t endpoint, char* buffer, int buffer_size)
-{
+void cn_endpoint_to_string(cn_endpoint_t endpoint, char* buffer, int buffer_size) {
 	CN_ASSERT(buffer);
 	CN_ASSERT(buffer_size >= 0);
 
@@ -4759,8 +4510,7 @@ void cn_endpoint_to_string(cn_endpoint_t endpoint, char* buffer, int buffer_size
 	}
 }
 
-int cn_endpoint_equals(cn_endpoint_t a, cn_endpoint_t b)
-{
+int cn_endpoint_equals(cn_endpoint_t a, cn_endpoint_t b) {
 	if (a.type != b.type) return 0;
 	if (a.port != b.port) return 0;
 
@@ -4780,23 +4530,20 @@ int cn_endpoint_equals(cn_endpoint_t a, cn_endpoint_t b)
 }
 
 #ifdef CN_WINDOWS
-	typedef SOCKET cn_socket_cn_handle_t;
+typedef SOCKET cn_socket_cn_handle_t;
 #else
-	typedef int cn_socket_cn_handle_t;
+typedef int cn_socket_cn_handle_t;
 #endif
 
-typedef struct cn_socket_t
-{
+typedef struct cn_socket_t {
 	cn_socket_cn_handle_t handle;
 	cn_endpoint_t endpoint;
 } cn_socket_t;
 
-void cn_socket_cleanup(cn_socket_t* socket)
-{
+void cn_socket_cleanup(cn_socket_t* socket) {
 	CN_ASSERT(socket);
 
-	if (socket->handle != 0)
-	{
+	if (socket->handle != 0) {
 #if CN_WINDOWS
 		closesocket(socket->handle);
 #else
@@ -4806,8 +4553,7 @@ void cn_socket_cleanup(cn_socket_t* socket)
 	}
 }
 
-static int s_socket_init(cn_socket_t* the_socket, cn_address_type_t address_type, int send_buffer_size, int receive_buffer_size)
-{
+static int s_socket_init(cn_socket_t* the_socket, cn_address_type_t address_type, int send_buffer_size, int receive_buffer_size) {
 	the_socket->handle = socket(address_type == CN_ADDRESS_TYPE_IPV6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
 #ifdef CN_WINDOWS
@@ -4822,11 +4568,9 @@ static int s_socket_init(cn_socket_t* the_socket, cn_address_type_t address_type
 
 	// Allow users to enforce ipv6 only.
 	// See: https://msdn.microsoft.com/en-us/library/windows/desktop/ms738574(v=vs.85).aspx
-	if (address_type == CN_ADDRESS_TYPE_IPV6)
-	{
+	if (address_type == CN_ADDRESS_TYPE_IPV6) {
 		int enable = 1;
-		if (setsockopt(the_socket->handle, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&enable, sizeof(enable)) != 0)
-		{
+		if (setsockopt(the_socket->handle, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&enable, sizeof(enable)) != 0) {
 			//error_set("Failed to strictly set socket only ipv6.");
 			cn_socket_cleanup(the_socket);
 			return -1;
@@ -4834,16 +4578,14 @@ static int s_socket_init(cn_socket_t* the_socket, cn_address_type_t address_type
 	}
 
 	// Increase socket send buffer size.
-	if (setsockopt(the_socket->handle, SOL_SOCKET, SO_SNDBUF, (char*)&send_buffer_size, sizeof(int)) != 0)
-	{
+	if (setsockopt(the_socket->handle, SOL_SOCKET, SO_SNDBUF, (char*)&send_buffer_size, sizeof(int)) != 0) {
 		//error_set("Failed to set socket send buffer size.");
 		cn_socket_cleanup(the_socket);
 		return -1;
 	}
 
 	// Increase socket receive buffer size.
-	if (setsockopt(the_socket->handle, SOL_SOCKET, SO_RCVBUF, (char*)&receive_buffer_size, sizeof(int)) != 0)
-	{
+	if (setsockopt(the_socket->handle, SOL_SOCKET, SO_RCVBUF, (char*)&receive_buffer_size, sizeof(int)) != 0) {
 		//error_set("Failed to set socket receive buffer size.");
 		cn_socket_cleanup(the_socket);
 		return -1;
@@ -4852,29 +4594,22 @@ static int s_socket_init(cn_socket_t* the_socket, cn_address_type_t address_type
 	return 0;
 }
 
-static int s_socket_bind_port_and_set_non_blocking(cn_socket_t* the_socket, cn_address_type_t address_type, uint16_t port)
-{
+static int s_socket_bind_port_and_set_non_blocking(cn_socket_t* the_socket, cn_address_type_t address_type, uint16_t port) {
 	// Binding to port zero means "any port", so record which one was bound.
-	if (port == 0)
-	{
-		if (address_type == CN_ADDRESS_TYPE_IPV6)
-		{
+	if (port == 0) {
+		if (address_type == CN_ADDRESS_TYPE_IPV6) {
 			struct sockaddr_in6 sin;
 			socklen_t len = sizeof(sin);
-			if (getsockname(the_socket->handle, (struct sockaddr*)&sin, &len) == -1)
-			{
+			if (getsockname(the_socket->handle, (struct sockaddr*)&sin, &len) == -1) {
 				//error_set("Failed to get ipv6 socket's assigned port number when binding to port 0.");
 				cn_socket_cleanup(the_socket);
 				return -1;
 			}
 			the_socket->endpoint.port = ntohs(sin.sin6_port);
-		}
-		else
-		{
+		} else {
 			struct sockaddr_in sin;
 			socklen_t len = sizeof(sin);
-			if (getsockname(the_socket->handle, (struct sockaddr*)&sin, &len) == -1)
-			{
+			if (getsockname(the_socket->handle, (struct sockaddr*)&sin, &len) == -1) {
 				//error_set("Failed to get ipv4 socket's assigned port number when binding to port 0.");
 				cn_socket_cleanup(the_socket);
 				return -1;
@@ -4887,8 +4622,7 @@ static int s_socket_bind_port_and_set_non_blocking(cn_socket_t* the_socket, cn_a
 #ifdef CN_WINDOWS
 
 	DWORD non_blocking = 1;
-	if (ioctlsocket(the_socket->handle, FIONBIO, &non_blocking) != 0)
-	{
+	if (ioctlsocket(the_socket->handle, FIONBIO, &non_blocking) != 0) {
 		//error_set("Failed to set socket to non blocking io.");
 		cn_socket_cleanup(the_socket);
 		return -1;
@@ -4897,8 +4631,7 @@ static int s_socket_bind_port_and_set_non_blocking(cn_socket_t* the_socket, cn_a
 #else
 
 	int non_blocking = 1;
-	if (fcntl(the_socket->handle, F_SETFL, O_NONBLOCK, non_blocking) == -1)
-	{
+	if (fcntl(the_socket->handle, F_SETFL, O_NONBLOCK, non_blocking) == -1) {
 		//error_set("Failed to set socket to non blocking io.");
 		cn_socket_cleanup(the_socket);
 		return -1;
@@ -4909,8 +4642,7 @@ static int s_socket_bind_port_and_set_non_blocking(cn_socket_t* the_socket, cn_a
 	return 0;
 }
 
-int cn_socket_init1(cn_socket_t* the_socket, cn_address_type_t address_type, uint16_t port, int send_buffer_size, int receive_buffer_size)
-{
+int cn_socket_init1(cn_socket_t* the_socket, cn_address_type_t address_type, uint16_t port, int send_buffer_size, int receive_buffer_size) {
 	CN_MEMSET(&the_socket->endpoint, 0, sizeof(cn_endpoint_t));
 	the_socket->endpoint.type = address_type;
 	the_socket->endpoint.port = port;
@@ -4920,31 +4652,26 @@ int cn_socket_init1(cn_socket_t* the_socket, cn_address_type_t address_type, uin
 	}
 
 	// Bind port.
-	if (address_type == CN_ADDRESS_TYPE_IPV6)
-	{
+	if (address_type == CN_ADDRESS_TYPE_IPV6) {
 		struct sockaddr_in6 socket_endpoint;
 		CN_MEMSET(&socket_endpoint, 0, sizeof(struct sockaddr_in6));
 		socket_endpoint.sin6_family = AF_INET6;
 		socket_endpoint.sin6_addr = in6addr_any;
 		socket_endpoint.sin6_port = htons(port);
 
-		if (bind(the_socket->handle, (struct sockaddr*)&socket_endpoint, sizeof(socket_endpoint)) < 0)
-		{
+		if (bind(the_socket->handle, (struct sockaddr*)&socket_endpoint, sizeof(socket_endpoint)) < 0) {
 			//error_set("Failed to bind ipv6 socket.");
 			cn_socket_cleanup(the_socket);
 			return -1;
 		}
-	}
-	else
-	{
+	} else {
 		struct sockaddr_in socket_endpoint;
 		CN_MEMSET(&socket_endpoint, 0, sizeof(socket_endpoint));
 		socket_endpoint.sin_family = AF_INET;
 		socket_endpoint.sin_addr.s_addr = INADDR_ANY;
 		socket_endpoint.sin_port = htons(port);
 
-		if (bind(the_socket->handle, (struct sockaddr*)&socket_endpoint, sizeof(socket_endpoint)) < 0)
-		{
+		if (bind(the_socket->handle, (struct sockaddr*)&socket_endpoint, sizeof(socket_endpoint)) < 0) {
 			//error_set("Failed to bind ipv4 socket.");
 			cn_socket_cleanup(the_socket);
 			return -1;
@@ -4958,8 +4685,7 @@ int cn_socket_init1(cn_socket_t* the_socket, cn_address_type_t address_type, uin
 	return 0;
 }
 
-int cn_socket_init2(cn_socket_t* the_socket, const char* address_and_port, int send_buffer_size, int receive_buffer_size)
-{
+int cn_socket_init2(cn_socket_t* the_socket, const char* address_and_port, int send_buffer_size, int receive_buffer_size) {
 	cn_endpoint_t endpoint;
 	if (cn_endpoint_init(&endpoint, address_and_port)) {
 		return -1;
@@ -4972,34 +4698,29 @@ int cn_socket_init2(cn_socket_t* the_socket, const char* address_and_port, int s
 	}
 
 	// Bind port.
-	if (endpoint.type == CN_ADDRESS_TYPE_IPV6)
-	{
+	if (endpoint.type == CN_ADDRESS_TYPE_IPV6) {
 		struct sockaddr_in6 socket_endpoint;
 		CN_MEMSET(&socket_endpoint, 0, sizeof(struct sockaddr_in6));
 		socket_endpoint.sin6_family = AF_INET6;
-		for (int i = 0; i < 8; ++i) ((uint16_t*)&socket_endpoint.sin6_addr) [i] = htons(endpoint.u.ipv6[i]);
+		for (int i = 0; i < 8; ++i) ((uint16_t*)&socket_endpoint.sin6_addr)[i] = htons(endpoint.u.ipv6[i]);
 		socket_endpoint.sin6_port = htons(endpoint.port);
 
-		if (bind(the_socket->handle, (struct sockaddr*)&socket_endpoint, sizeof(socket_endpoint)) < 0)
-		{
+		if (bind(the_socket->handle, (struct sockaddr*)&socket_endpoint, sizeof(socket_endpoint)) < 0) {
 			//error_set("Failed to bind ipv6 socket.");
 			cn_socket_cleanup(the_socket);
 			return -1;
 		}
-	}
-	else
-	{
+	} else {
 		struct sockaddr_in socket_endpoint;
 		CN_MEMSET(&socket_endpoint, 0, sizeof(socket_endpoint));
 		socket_endpoint.sin_family = AF_INET;
-		socket_endpoint.sin_addr.s_addr = (((uint32_t) endpoint.u.ipv4[0]))       |
-		                                  (((uint32_t) endpoint.u.ipv4[1]) << 8)  |
-		                                  (((uint32_t) endpoint.u.ipv4[2]) << 16) |
-		                                  (((uint32_t) endpoint.u.ipv4[3]) << 24);
+		socket_endpoint.sin_addr.s_addr = (((uint32_t)endpoint.u.ipv4[0])) |
+			(((uint32_t)endpoint.u.ipv4[1]) << 8) |
+			(((uint32_t)endpoint.u.ipv4[2]) << 16) |
+			(((uint32_t)endpoint.u.ipv4[3]) << 24);
 		socket_endpoint.sin_port = htons(endpoint.port);
 
-		if (bind(the_socket->handle, (struct sockaddr*)&socket_endpoint, sizeof(socket_endpoint)) < 0)
-		{
+		if (bind(the_socket->handle, (struct sockaddr*)&socket_endpoint, sizeof(socket_endpoint)) < 0) {
 			//error_set("Failed to bind ipv4 socket.");
 			cn_socket_cleanup(the_socket);
 			return -1;
@@ -5013,37 +4734,32 @@ int cn_socket_init2(cn_socket_t* the_socket, const char* address_and_port, int s
 	return 0;
 }
 
-int cn_socket_send_internal(cn_socket_t* socket, cn_endpoint_t send_to, const void* data, int byte_count)
-{
+int cn_socket_send_internal(cn_socket_t* socket, cn_endpoint_t send_to, const void* data, int byte_count) {
 	cn_endpoint_t endpoint = send_to;
 	CN_ASSERT(data);
 	CN_ASSERT(byte_count >= 0);
 	CN_ASSERT(socket->handle != 0);
 	CN_ASSERT(endpoint.type != CN_ADDRESS_TYPE_NONE);
 
-	if (endpoint.type == CN_ADDRESS_TYPE_IPV6)
-	{
+	if (endpoint.type == CN_ADDRESS_TYPE_IPV6) {
 		struct sockaddr_in6 socket_address;
 		CN_MEMSET(&socket_address, 0, sizeof(socket_address));
 		socket_address.sin6_family = AF_INET6;
 		int i;
-		for (i = 0; i < 8; ++i)
-		{
-			((uint16_t*) &socket_address.sin6_addr) [i] = htons(endpoint.u.ipv6[i]);
+		for (i = 0; i < 8; ++i) {
+			((uint16_t*)&socket_address.sin6_addr)[i] = htons(endpoint.u.ipv6[i]);
 		}
 		socket_address.sin6_port = htons(endpoint.port);
 		int result = sendto(socket->handle, (const char*)data, byte_count, 0, (struct sockaddr*)&socket_address, sizeof(socket_address));
 		return result;
-	}
-	else if (endpoint.type == CN_ADDRESS_TYPE_IPV4)
-	{
+	} else if (endpoint.type == CN_ADDRESS_TYPE_IPV4) {
 		struct sockaddr_in socket_address;
 		CN_MEMSET(&socket_address, 0, sizeof(socket_address));
 		socket_address.sin_family = AF_INET;
-		socket_address.sin_addr.s_addr = (((uint32_t)endpoint.u.ipv4[0]))        |
-		                                 (((uint32_t)endpoint.u.ipv4[1]) << 8)   |
-		                                 (((uint32_t)endpoint.u.ipv4[2]) << 16)  |
-		                                 (((uint32_t)endpoint.u.ipv4[3]) << 24);
+		socket_address.sin_addr.s_addr = (((uint32_t)endpoint.u.ipv4[0])) |
+			(((uint32_t)endpoint.u.ipv4[1]) << 8) |
+			(((uint32_t)endpoint.u.ipv4[2]) << 16) |
+			(((uint32_t)endpoint.u.ipv4[3]) << 24);
 		socket_address.sin_port = htons(endpoint.port);
 		int result = sendto(socket->handle, (const char*)data, byte_count, 0, (struct sockaddr*)&socket_address, sizeof(socket_address));
 		return result;
@@ -5052,8 +4768,7 @@ int cn_socket_send_internal(cn_socket_t* socket, cn_endpoint_t send_to, const vo
 	return -1;
 }
 
-int cn_socket_receive(cn_socket_t* the_socket, cn_endpoint_t* from, void* data, int byte_count)
-{
+int cn_socket_receive(cn_socket_t* the_socket, cn_endpoint_t* from, void* data, int byte_count) {
 	CN_ASSERT(the_socket);
 	CN_ASSERT(the_socket->handle != 0);
 	CN_ASSERT(from);
@@ -5071,45 +4786,37 @@ int cn_socket_receive(cn_socket_t* the_socket, cn_endpoint_t* from, void* data, 
 	int result = recvfrom(the_socket->handle, (char*)data, byte_count, 0, (struct sockaddr*)&sockaddr_from, &from_length);
 
 #ifdef CN_WINDOWS
-	if (result == SOCKET_ERROR)
-	{
+	if (result == SOCKET_ERROR) {
 		int error = WSAGetLastError();
 		if (error == WSAEWOULDBLOCK || error == WSAECONNRESET) return 0;
 		//error_set("The function recvfrom failed.");
 		return -1;
 	}
 #else
-	if (result <= 0)
-	{
+	if (result <= 0) {
 		if (errno == EAGAIN) return 0;
 		//error_set("The function recvfrom failed.");
 		return -1;
 	}
 #endif
 
-	if (sockaddr_from.ss_family == AF_INET6)
-	{
-		struct sockaddr_in6* addr_ipv6 = (struct sockaddr_in6*) &sockaddr_from;
+	if (sockaddr_from.ss_family == AF_INET6) {
+		struct sockaddr_in6* addr_ipv6 = (struct sockaddr_in6*)&sockaddr_from;
 		from->type = CN_ADDRESS_TYPE_IPV6;
 		int i;
-		for (i = 0; i < 8; ++i)
-		{
-			from->u.ipv6[i] = ntohs(((uint16_t*) &addr_ipv6->sin6_addr) [i]);
+		for (i = 0; i < 8; ++i) {
+			from->u.ipv6[i] = ntohs(((uint16_t*)&addr_ipv6->sin6_addr)[i]);
 		}
 		from->port = ntohs(addr_ipv6->sin6_port);
-	}
-	else if (sockaddr_from.ss_family == AF_INET)
-	{
-		struct sockaddr_in* addr_ipv4 = (struct sockaddr_in*) &sockaddr_from;
+	} else if (sockaddr_from.ss_family == AF_INET) {
+		struct sockaddr_in* addr_ipv4 = (struct sockaddr_in*)&sockaddr_from;
 		from->type = CN_ADDRESS_TYPE_IPV4;
 		from->u.ipv4[0] = (uint8_t)((addr_ipv4->sin_addr.s_addr & 0x000000FF));
 		from->u.ipv4[1] = (uint8_t)((addr_ipv4->sin_addr.s_addr & 0x0000FF00) >> 8);
 		from->u.ipv4[2] = (uint8_t)((addr_ipv4->sin_addr.s_addr & 0x00FF0000) >> 16);
 		from->u.ipv4[3] = (uint8_t)((addr_ipv4->sin_addr.s_addr & 0xFF000000) >> 24);
 		from->port = ntohs(addr_ipv4->sin_port);
-	}
-	else
-	{
+	} else {
 		CN_ASSERT(0);
 		//error_set("The function recvfrom returned an invalid ip format.");
 		return -1;
@@ -5124,8 +4831,7 @@ int cn_socket_receive(cn_socket_t* the_socket, cn_endpoint_t* from, void* data, 
 
 typedef struct cn_simulator_t cn_simulator_t;
 
-typedef struct cn_protocol_client_t
-{
+struct cn_protocol_client_t {
 	bool use_ipv6;
 	cn_protocol_client_state_t state;
 	double last_packet_recieved_time;
@@ -5151,12 +4857,11 @@ typedef struct cn_protocol_client_t
 	uint8_t buffer[CN_PROTOCOL_PACKET_SIZE_MAX];
 	uint8_t connect_token_packet[CN_PROTOCOL_CONNECT_TOKEN_PACKET_SIZE];
 	void* mem_ctx;
-} cn_protocol_client_t;
+};
 
 // -------------------------------------------------------------------------------------------------
 
-typedef struct cn_protocol_server_t
-{
+struct cn_protocol_server_t {
 	bool running;
 	uint64_t application_id;
 	uint64_t current_time;
@@ -5188,7 +4893,7 @@ typedef struct cn_protocol_server_t
 
 	uint8_t buffer[CN_PROTOCOL_PACKET_SIZE_MAX];
 	void* mem_ctx;
-} cn_protocol_server_t;
+};
 
 // -------------------------------------------------------------------------------------------------
 
@@ -5198,13 +4903,11 @@ typedef struct cn_protocol_server_t
 #define CN_CHECK(X) if (X) ret = -1;
 #define CN_CRYPTO_CONTEXT "CN_CTX"
 
-void cn_crypto_encrypt(const cn_crypto_key_t* key, uint8_t* data, int data_size, uint64_t msg_id)
-{
+void cn_crypto_encrypt(const cn_crypto_key_t* key, uint8_t* data, int data_size, uint64_t msg_id) {
 	hydro_secretbox_encrypt(data, data, (uint64_t)data_size, msg_id, CN_CRYPTO_CONTEXT, key->key);
 }
 
-cn_error_t cn_crypto_decrypt(const cn_crypto_key_t* key, uint8_t* data, int data_size, uint64_t msg_id)
-{
+cn_error_t cn_crypto_decrypt(const cn_crypto_key_t* key, uint8_t* data, int data_size, uint64_t msg_id) {
 	if (hydro_secretbox_decrypt(data, data, (size_t)data_size, msg_id, CN_CRYPTO_CONTEXT, key->key) != 0) {
 		return cn_error_failure("Message forged.");
 	} else {
@@ -5212,33 +4915,28 @@ cn_error_t cn_crypto_decrypt(const cn_crypto_key_t* key, uint8_t* data, int data
 	}
 }
 
-cn_crypto_key_t crypto_generate_key()
-{
+cn_crypto_key_t crypto_generate_key() {
 	cn_crypto_key_t key;
 	hydro_secretbox_keygen(key.key);
 	return key;
 }
 
-void cn_crypto_random_bytes(void* data, int byte_count)
-{
+void cn_crypto_random_bytes(void* data, int byte_count) {
 	hydro_random_buf(data, byte_count);
 }
 
-void cn_crypto_sign_keygen(cn_crypto_sign_public_t* public_key, cn_crypto_sign_secret_t* secret_key)
-{
+void cn_crypto_sign_keygen(cn_crypto_sign_public_t* public_key, cn_crypto_sign_secret_t* secret_key) {
 	hydro_sign_keypair key_pair;
 	hydro_sign_keygen(&key_pair);
 	CN_MEMCPY(public_key->key, key_pair.pk, 32);
 	CN_MEMCPY(secret_key->key, key_pair.sk, 64);
 }
 
-void cn_crypto_sign_create(const cn_crypto_sign_secret_t* secret_key, cn_crypto_signature_t* signature, const uint8_t* data, int data_size)
-{
+void cn_crypto_sign_create(const cn_crypto_sign_secret_t* secret_key, cn_crypto_signature_t* signature, const uint8_t* data, int data_size) {
 	hydro_sign_create(signature->bytes, data, (size_t)data_size, CN_CRYPTO_CONTEXT, secret_key->key);
 }
 
-cn_error_t cn_crypto_sign_verify(const cn_crypto_sign_public_t* public_key, const cn_crypto_signature_t* signature, const uint8_t* data, int data_size)
-{
+cn_error_t cn_crypto_sign_verify(const cn_crypto_sign_public_t* public_key, const cn_crypto_signature_t* signature, const uint8_t* data, int data_size) {
 	if (hydro_sign_verify(signature->bytes, data, (size_t)data_size, CN_CRYPTO_CONTEXT, public_key->key) != 0) {
 		return cn_error_failure("Message forged.");
 	} else {
@@ -5246,16 +4944,14 @@ cn_error_t cn_crypto_sign_verify(const cn_crypto_sign_public_t* public_key, cons
 	}
 }
 
-cn_error_t cn_crypto_init()
-{
+cn_error_t cn_crypto_init() {
 	if (hydro_init() != 0) {
 		return cn_error_failure("Unable to initialize crypto library. It is *not safe* to connect to the net.");
 	}
 	return cn_error_success();
 }
 
-cn_error_t cn_init()
-{
+cn_error_t cn_init() {
 #ifdef CN_WINDOWS
 	WSADATA wsa_data;
 	if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != NO_ERROR) {
@@ -5266,8 +4962,7 @@ cn_error_t cn_init()
 	return cn_crypto_init();
 }
 
-void cn_cleanup()
-{
+void cn_cleanup() {
 #ifdef CN_WINDOWS
 	WSACleanup();
 #endif
@@ -5277,13 +4972,11 @@ void cn_cleanup()
 
 #define CN_PROTOCOL_NET_SIMULATOR_MAX_PACKETS (1024 * 5)
 
-typedef struct cn_rnd_t
-{
+typedef struct cn_rnd_t {
 	uint64_t state[2];
 } cn_rnd_t;
 
-static uint64_t cn_rnd_murmur3_avalanche64(uint64_t h)
-{
+static uint64_t cn_rnd_murmur3_avalanche64(uint64_t h) {
 	h ^= h >> 33;
 	h *= 0xff51afd7ed558ccd;
 	h ^= h >> 33;
@@ -5292,8 +4985,7 @@ static uint64_t cn_rnd_murmur3_avalanche64(uint64_t h)
 	return h;
 }
 
-static cn_rnd_t cn_rnd_seed(uint64_t seed)
-{
+static cn_rnd_t cn_rnd_seed(uint64_t seed) {
 	cn_rnd_t rnd;
 	uint64_t value = cn_rnd_murmur3_avalanche64((seed << 1ULL) | 1ULL);
 	rnd.state[0] = value;
@@ -5301,8 +4993,7 @@ static cn_rnd_t cn_rnd_seed(uint64_t seed)
 	return rnd;
 }
 
-static uint64_t cn_rnd_next(cn_rnd_t* rnd)
-{
+static uint64_t cn_rnd_next(cn_rnd_t* rnd) {
 	uint64_t x = rnd->state[0];
 	uint64_t y = rnd->state[1];
 	rnd->state[0] = y;
@@ -5313,8 +5004,7 @@ static uint64_t cn_rnd_next(cn_rnd_t* rnd)
 	return x + y;
 }
 
-static double cn_rnd_next_double(cn_rnd_t* rnd)
-{
+static double cn_rnd_next_double(cn_rnd_t* rnd) {
 	uint64_t value = cn_rnd_next(rnd);
 	uint64_t exponent = 1023;
 	uint64_t mantissa = value >> 12;
@@ -5322,16 +5012,14 @@ static double cn_rnd_next_double(cn_rnd_t* rnd)
 	return *(double*)&result - 1.0;
 }
 
-typedef struct cn_simulator_packet_t
-{
+typedef struct cn_simulator_packet_t {
 	double delay;
 	cn_endpoint_t to;
 	void* data;
 	int size;
 } cn_simulator_packet_t;
 
-struct cn_simulator_t
-{
+struct cn_simulator_t {
 	cn_socket_t* socket;
 	double latency;
 	double jitter;
@@ -5343,8 +5031,7 @@ struct cn_simulator_t
 	cn_simulator_packet_t packets[CN_PROTOCOL_NET_SIMULATOR_MAX_PACKETS];
 };
 
-cn_simulator_t* cn_simulator_create(cn_socket_t* socket, void* mem_ctx)
-{
+cn_simulator_t* cn_simulator_create(cn_socket_t* socket, void* mem_ctx) {
 	cn_simulator_t* sim = CN_ALLOC(sizeof(cn_simulator_t), mem_ctx);
 	CN_MEMSET(sim, 0, sizeof(*sim));
 	sim->socket = socket;
@@ -5353,8 +5040,7 @@ cn_simulator_t* cn_simulator_create(cn_socket_t* socket, void* mem_ctx)
 	return sim;
 }
 
-void cn_simulator_destroy(cn_simulator_t* sim)
-{
+void cn_simulator_destroy(cn_simulator_t* sim) {
 	if (!sim) return;
 	for (int i = 0; i < CN_PROTOCOL_NET_SIMULATOR_MAX_PACKETS; ++i) {
 		cn_simulator_packet_t* p = sim->packets + i;
@@ -5363,8 +5049,7 @@ void cn_simulator_destroy(cn_simulator_t* sim)
 	CN_FREE(sim, sim->mem_ctx);
 }
 
-void cn_simulator_add(cn_simulator_t* sim, cn_endpoint_t to, const void* packet, int size)
-{
+void cn_simulator_add(cn_simulator_t* sim, cn_endpoint_t to, const void* packet, int size) {
 	bool drop = cn_rnd_next_double(&sim->rnd) < sim->drop_chance;
 	if (drop) return;
 
@@ -5378,8 +5063,7 @@ void cn_simulator_add(cn_simulator_t* sim, cn_endpoint_t to, const void* packet,
 	CN_MEMCPY(p->data, packet, size);
 }
 
-void cn_simulator_update(cn_simulator_t* sim, double dt)
-{
+void cn_simulator_update(cn_simulator_t* sim, double dt) {
 	if (!sim) return;
 	for (int i = 0; i < CN_PROTOCOL_NET_SIMULATOR_MAX_PACKETS; ++i) {
 		cn_simulator_packet_t* p = sim->packets + i;
@@ -5399,8 +5083,7 @@ void cn_simulator_update(cn_simulator_t* sim, double dt)
 	}
 }
 
-int cn_socket_send(cn_socket_t* socket, cn_simulator_t* sim, cn_endpoint_t to, const void* data, int size)
-{
+int cn_socket_send(cn_socket_t* socket, cn_simulator_t* sim, cn_endpoint_t to, const void* data, int size) {
 	if (sim) {
 		cn_simulator_add(sim, to, data, size);
 		return size;
@@ -5410,8 +5093,6 @@ int cn_socket_send(cn_socket_t* socket, cn_simulator_t* sim, cn_endpoint_t to, c
 }
 
 // -------------------------------------------------------------------------------------------------
-
-static bool s_cn_is_init = false;
 
 cn_error_t cn_generate_connect_token(
 	uint64_t application_id,
@@ -5426,16 +5107,7 @@ cn_error_t cn_generate_connect_token(
 	const uint8_t* user_data,
 	const cn_crypto_sign_secret_t* shared_secret_key,
 	uint8_t* token_ptr_out
-)
-{
-	if (!s_cn_is_init) {
-		if (cn_is_error(cn_init())) {
-			return cn_error_failure("Unable to initialization Cute Net.");
-		} else {
-			s_cn_is_init = true;
-		}
-	}
-
+) {
 	CN_ASSERT(address_count >= 1 && address_count <= 32);
 	CN_ASSERT(creation_timestamp < expiration_timestamp);
 
@@ -5456,8 +5128,7 @@ cn_error_t cn_generate_connect_token(
 	cn_write_uint64(p, expiration_timestamp);
 	cn_write_uint32(p, handshake_timeout);
 	cn_write_uint32(p, (uint32_t)address_count);
-	for (int i = 0; i < address_count; ++i)
-	{
+	for (int i = 0; i < address_count; ++i) {
 		cn_endpoint_t endpoint;
 		if (cn_endpoint_init(&endpoint, address_list[i])) return cn_error_failure("Unable to initialize endpoint.");
 		cn_write_endpoint(p, endpoint);
@@ -5505,14 +5176,12 @@ cn_error_t cn_generate_connect_token(
 
 // -------------------------------------------------------------------------------------------------
 
-void cn_protocol_replay_buffer_init(cn_protocol_replay_buffer_t* replay_buffer)
-{
+void cn_protocol_replay_buffer_init(cn_protocol_replay_buffer_t* replay_buffer) {
 	replay_buffer->max = 0;
 	CN_MEMSET(replay_buffer->entries, ~0, sizeof(uint64_t) * CN_PROTOCOL_REPLAY_BUFFER_SIZE);
 }
 
-int cn_protocol_replay_buffer_cull_duplicate(cn_protocol_replay_buffer_t* replay_buffer, uint64_t sequence)
-{
+int cn_protocol_replay_buffer_cull_duplicate(cn_protocol_replay_buffer_t* replay_buffer, uint64_t sequence) {
 	if (sequence + CN_PROTOCOL_REPLAY_BUFFER_SIZE < replay_buffer->max) {
 		// This is UDP - just drop old packets.
 		return -1;
@@ -5530,8 +5199,7 @@ int cn_protocol_replay_buffer_cull_duplicate(cn_protocol_replay_buffer_t* replay
 	}
 }
 
-void cn_protocol_replay_buffer_update(cn_protocol_replay_buffer_t* replay_buffer, uint64_t sequence)
-{
+void cn_protocol_replay_buffer_update(cn_protocol_replay_buffer_t* replay_buffer, uint64_t sequence) {
 	if (replay_buffer->max < sequence) {
 		replay_buffer->max = sequence;
 	}
@@ -5547,8 +5215,7 @@ void cn_protocol_replay_buffer_update(cn_protocol_replay_buffer_t* replay_buffer
 
 // -------------------------------------------------------------------------------------------------
 
-typedef struct cn_memory_pool_t
-{
+typedef struct cn_memory_pool_t {
 	int element_size;
 	int arena_size;
 	uint8_t* arena;
@@ -5557,9 +5224,8 @@ typedef struct cn_memory_pool_t
 	void* mem_ctx;
 } cn_memory_pool_t;
 
-cn_memory_pool_t* cn_memory_pool_create(int element_size, int element_count, void* user_allocator_context)
-{
-	size_t stride = element_size > sizeof(void*) ? element_size : sizeof(void*);
+cn_memory_pool_t* cn_memory_pool_create(int element_size, int element_count, void* user_allocator_context) {
+	size_t stride = (size_t)element_size > sizeof(void*) ? element_size : sizeof(void*);
 	size_t arena_size = sizeof(cn_memory_pool_t) + stride * element_count;
 	cn_memory_pool_t* pool = (cn_memory_pool_t*)CN_ALLOC(arena_size, user_allocator_context);
 
@@ -5569,8 +5235,7 @@ cn_memory_pool_t* cn_memory_pool_create(int element_size, int element_count, voi
 	pool->free_list = pool->arena;
 	pool->overflow_count = 0;
 
-	for (int i = 0; i < element_count - 1; ++i)
-	{
+	for (int i = 0; i < element_count - 1; ++i) {
 		void** element = (void**)(pool->arena + stride * i);
 		void* next = (void*)(pool->arena + stride * (i + 1));
 		*element = next;
@@ -5582,8 +5247,7 @@ cn_memory_pool_t* cn_memory_pool_create(int element_size, int element_count, voi
 	return pool;
 }
 
-void cn_memory_pool_destroy(cn_memory_pool_t* pool)
-{
+void cn_memory_pool_destroy(cn_memory_pool_t* pool) {
 	if (pool->overflow_count) {
 		// Attempted to destroy pool without freeing all overflow allocations.
 		CN_ASSERT(pool->overflow_count == 0);
@@ -5591,10 +5255,9 @@ void cn_memory_pool_destroy(cn_memory_pool_t* pool)
 	CN_FREE(pool, pool->mem_ctx);
 }
 
-void* cn_memory_pool_try_alloc(cn_memory_pool_t* pool)
-{
+void* cn_memory_pool_try_alloc(cn_memory_pool_t* pool) {
 	if (pool->free_list) {
-		void *mem = pool->free_list;
+		void* mem = pool->free_list;
 		pool->free_list = *((void**)pool->free_list);
 		return mem;
 	} else {
@@ -5602,9 +5265,8 @@ void* cn_memory_pool_try_alloc(cn_memory_pool_t* pool)
 	}
 }
 
-void* cn_memory_pool_alloc(cn_memory_pool_t* pool)
-{
-	void *mem = cn_memory_pool_try_alloc(pool);
+void* cn_memory_pool_alloc(cn_memory_pool_t* pool) {
+	void* mem = cn_memory_pool_try_alloc(pool);
 	if (!mem) {
 		mem = CN_ALLOC(pool->element_size, pool->mem_ctx);
 		if (mem) {
@@ -5614,8 +5276,7 @@ void* cn_memory_pool_alloc(cn_memory_pool_t* pool)
 	return mem;
 }
 
-void cn_memory_pool_free(cn_memory_pool_t* pool, void* element)
-{
+void cn_memory_pool_free(cn_memory_pool_t* pool, void* element) {
 	int difference = (int)((uint8_t*)element - pool->arena);
 	int in_bounds = difference < pool->arena_size;
 	if (pool->overflow_count && !in_bounds) {
@@ -5632,12 +5293,10 @@ void cn_memory_pool_free(cn_memory_pool_t* pool, void* element)
 
 // -------------------------------------------------------------------------------------------------
 
-static int s_packet_size(cn_protocol_packet_type_t type)
-{
+static int s_packet_size(cn_protocol_packet_type_t type) {
 	int size = 0;
 
-	switch (type)
-	{
+	switch (type) {
 	case CN_PROTOCOL_PACKET_TYPE_CONNECT_TOKEN:
 		size = sizeof(cn_protocol_packet_connect_token_t);
 		break;
@@ -5676,14 +5335,12 @@ static int s_packet_size(cn_protocol_packet_type_t type)
 	return size;
 }
 
-struct cn_protocol_packet_allocator_t
-{
+struct cn_protocol_packet_allocator_t {
 	cn_memory_pool_t* pools[CN_PROTOCOL_PACKET_TYPE_COUNT];
 	void* user_allocator_context;
 };
 
-cn_protocol_packet_allocator_t* cn_protocol_packet_allocator_create(void* user_allocator_context)
-{
+cn_protocol_packet_allocator_t* cn_protocol_packet_allocator_create(void* user_allocator_context) {
 	cn_protocol_packet_allocator_t* packet_allocator = (cn_protocol_packet_allocator_t*)CN_ALLOC(sizeof(cn_protocol_packet_allocator_t), user_allocator_context);
 	packet_allocator->pools[CN_PROTOCOL_PACKET_TYPE_CONNECT_TOKEN] = cn_memory_pool_create(s_packet_size(CN_PROTOCOL_PACKET_TYPE_CONNECT_TOKEN), 256, user_allocator_context);
 	packet_allocator->pools[CN_PROTOCOL_PACKET_TYPE_CONNECTION_ACCEPTED] = cn_memory_pool_create(s_packet_size(CN_PROTOCOL_PACKET_TYPE_CONNECTION_ACCEPTED), 256, user_allocator_context);
@@ -5697,16 +5354,14 @@ cn_protocol_packet_allocator_t* cn_protocol_packet_allocator_create(void* user_a
 	return packet_allocator;
 }
 
-void cn_protocol_packet_allocator_destroy(cn_protocol_packet_allocator_t* packet_allocator)
-{
+void cn_protocol_packet_allocator_destroy(cn_protocol_packet_allocator_t* packet_allocator) {
 	for (int i = 0; i < CN_PROTOCOL_PACKET_TYPE_COUNT; ++i) {
 		cn_memory_pool_destroy(packet_allocator->pools[i]);
 	}
 	CN_FREE(packet_allocator, packet_allocator->user_allocator_context);
 }
 
-void* cn_protocol_packet_allocator_alloc(cn_protocol_packet_allocator_t* packet_allocator, cn_protocol_packet_type_t type)
-{
+void* cn_protocol_packet_allocator_alloc(cn_protocol_packet_allocator_t* packet_allocator, cn_protocol_packet_type_t type) {
 	if (!packet_allocator) {
 		return CN_ALLOC(s_packet_size(type), NULL);
 	} else {
@@ -5715,8 +5370,7 @@ void* cn_protocol_packet_allocator_alloc(cn_protocol_packet_allocator_t* packet_
 	}
 }
 
-void cn_protocol_packet_allocator_free(cn_protocol_packet_allocator_t* packet_allocator, cn_protocol_packet_type_t type, void* packet)
-{
+void cn_protocol_packet_allocator_free(cn_protocol_packet_allocator_t* packet_allocator, cn_protocol_packet_type_t type, void* packet) {
 	if (!packet_allocator) {
 		CN_FREE(packet, NULL);
 	} else {
@@ -5726,8 +5380,7 @@ void cn_protocol_packet_allocator_free(cn_protocol_packet_allocator_t* packet_al
 
 // -------------------------------------------------------------------------------------------------
 
-cn_error_t cn_protocol_read_connect_token_packet_public_section(uint8_t* buffer, uint64_t application_id, uint64_t current_time, cn_protocol_packet_connect_token_t* packet)
-{
+cn_error_t cn_protocol_read_connect_token_packet_public_section(uint8_t* buffer, uint64_t application_id, uint64_t current_time, cn_protocol_packet_connect_token_t* packet) {
 	uint8_t* buffer_start = buffer;
 
 	// Read public section.
@@ -5755,8 +5408,7 @@ cn_error_t cn_protocol_read_connect_token_packet_public_section(uint8_t* buffer,
 	return cn_error_success();
 }
 
-static uint8_t* s_protocol_header(uint8_t** p, uint8_t type, uint64_t sequence)
-{
+static uint8_t* s_protocol_header(uint8_t** p, uint8_t type, uint64_t sequence) {
 	cn_write_uint8(p, type);
 	cn_write_uint64(p, sequence);
 	CN_MEMSET(*p, 0, CN_PROTOCOL_SIGNATURE_SIZE - CN_CRYPTO_HEADER_BYTES);
@@ -5764,8 +5416,7 @@ static uint8_t* s_protocol_header(uint8_t** p, uint8_t type, uint64_t sequence)
 	return *p;
 }
 
-int cn_protocol_packet_write(void* packet_ptr, uint8_t* buffer, uint64_t sequence, const cn_crypto_key_t* key)
-{
+int cn_protocol_packet_write(void* packet_ptr, uint8_t* buffer, uint64_t sequence, const cn_crypto_key_t* key) {
 	uint8_t type = *(uint8_t*)packet_ptr;
 
 	if (type == CN_PROTOCOL_PACKET_TYPE_CONNECT_TOKEN) {
@@ -5777,8 +5428,7 @@ int cn_protocol_packet_write(void* packet_ptr, uint8_t* buffer, uint64_t sequenc
 	uint8_t* payload = s_protocol_header(&buffer, type, sequence);
 	int payload_size = 0;
 
-	switch (type)
-	{
+	switch (type) {
 	case CN_PROTOCOL_PACKET_TYPE_CONNECTION_ACCEPTED:
 	{
 		cn_protocol_packet_connection_accepted_t* packet = (cn_protocol_packet_connection_accepted_t*)packet_ptr;
@@ -5792,6 +5442,7 @@ int cn_protocol_packet_write(void* packet_ptr, uint8_t* buffer, uint64_t sequenc
 	case CN_PROTOCOL_PACKET_TYPE_CONNECTION_DENIED:
 	{
 		cn_protocol_packet_connection_denied_t* packet = (cn_protocol_packet_connection_denied_t*)packet_ptr;
+		(void)packet;
 		payload_size = (int)(buffer - payload);
 		CN_ASSERT(payload_size == 0);
 	}	break;
@@ -5799,6 +5450,7 @@ int cn_protocol_packet_write(void* packet_ptr, uint8_t* buffer, uint64_t sequenc
 	case CN_PROTOCOL_PACKET_TYPE_KEEPALIVE:
 	{
 		cn_protocol_packet_keepalive_t* packet = (cn_protocol_packet_keepalive_t*)packet_ptr;
+		(void)packet;
 		payload_size = (int)(buffer - payload);
 		CN_ASSERT(payload_size == 0);
 	}	break;
@@ -5806,6 +5458,7 @@ int cn_protocol_packet_write(void* packet_ptr, uint8_t* buffer, uint64_t sequenc
 	case CN_PROTOCOL_PACKET_TYPE_DISCONNECT:
 	{
 		cn_protocol_packet_disconnect_t* packet = (cn_protocol_packet_disconnect_t*)packet_ptr;
+		(void)packet;
 		payload_size = (int)(buffer - payload);
 		CN_ASSERT(payload_size == 0);
 	}	break;
@@ -5835,17 +5488,15 @@ int cn_protocol_packet_write(void* packet_ptr, uint8_t* buffer, uint64_t sequenc
 	cn_crypto_encrypt(key, payload, payload_size, sequence);
 
 	size_t written = buffer - buffer_start;
-	return (int)(written) + CN_CRYPTO_HEADER_BYTES;
+	return (int)(written)+CN_CRYPTO_HEADER_BYTES;
 }
 
-void* cn_protocol_packet_open(uint8_t* buffer, int size, const cn_crypto_key_t* key, cn_protocol_packet_allocator_t* pa, cn_protocol_replay_buffer_t* replay_buffer, uint64_t* sequence_ptr)
-{
+void* cn_protocol_packet_open(uint8_t* buffer, int size, const cn_crypto_key_t* key, cn_protocol_packet_allocator_t* pa, cn_protocol_replay_buffer_t* replay_buffer, uint64_t* sequence_ptr) {
 	int ret = 0;
 	uint8_t* buffer_start = buffer;
 	uint8_t type = cn_read_uint8(&buffer);
 
-	switch (type)
-	{
+	switch (type) {
 	case CN_PROTOCOL_PACKET_TYPE_CONNECTION_ACCEPTED: CN_CHECK(size != 16 + 73); if (ret) return NULL; break;
 	case CN_PROTOCOL_PACKET_TYPE_CONNECTION_DENIED: CN_CHECK(size != 73); if (ret) return NULL; break;
 	case CN_PROTOCOL_PACKET_TYPE_KEEPALIVE: CN_CHECK(size != 73); if (ret) return NULL; break;
@@ -5877,8 +5528,7 @@ void* cn_protocol_packet_open(uint8_t* buffer, int size, const cn_crypto_key_t* 
 		*sequence_ptr = sequence;
 	}
 
-	switch (type)
-	{
+	switch (type) {
 	case CN_PROTOCOL_PACKET_TYPE_CONNECTION_ACCEPTED:
 	{
 		cn_protocol_packet_connection_accepted_t* packet = (cn_protocol_packet_connection_accepted_t*)cn_protocol_packet_allocator_alloc(pa, (cn_protocol_packet_type_t)type);
@@ -5935,10 +5585,8 @@ void* cn_protocol_packet_open(uint8_t* buffer, int size, const cn_crypto_key_t* 
 
 // -------------------------------------------------------------------------------------------------
 
-uint8_t* cn_protocol_client_read_connect_token_from_web_service(uint8_t* buffer, uint64_t application_id, uint64_t current_time, cn_protocol_connect_token_t* token)
-{
+uint8_t* cn_protocol_client_read_connect_token_from_web_service(uint8_t* buffer, uint64_t application_id, uint64_t current_time, cn_protocol_connect_token_t* token) {
 	int ret = 0;
-	uint8_t* buffer_start = buffer;
 
 	// Read rest section.
 	CN_CHECK(CN_STRNCMP((const char*)buffer, (const char*)CN_PROTOCOL_VERSION_STRING, CN_PROTOCOL_VERSION_STRING_LEN));
@@ -5960,8 +5608,7 @@ uint8_t* cn_protocol_client_read_connect_token_from_web_service(uint8_t* buffer,
 	return ret ? NULL : connect_token_packet;
 }
 
-cn_error_t cn_protocol_server_decrypt_connect_token_packet(uint8_t* packet_buffer, const cn_crypto_sign_public_t* pk, const cn_crypto_sign_secret_t* sk, uint64_t application_id, uint64_t current_time, cn_protocol_connect_token_decrypted_t* token)
-{
+cn_error_t cn_protocol_server_decrypt_connect_token_packet(uint8_t* packet_buffer, const cn_crypto_sign_public_t* pk, const cn_crypto_sign_secret_t* sk, uint64_t application_id, uint64_t current_time, cn_protocol_connect_token_decrypted_t* token) {
 	// Read public section.
 	cn_protocol_packet_connect_token_t packet;
 	cn_error_t err;
@@ -5980,6 +5627,7 @@ cn_error_t cn_protocol_server_decrypt_connect_token_packet(uint8_t* packet_buffe
 	// Decrypt the secret section.
 	uint8_t* secret_section = packet_buffer + 568;
 	uint8_t* additional_data = packet_buffer;
+	(void)additional_data;
 
 	if (cn_is_error(cn_crypto_decrypt((cn_crypto_key_t*)sk, secret_section, CN_PROTOCOL_CONNECT_TOKEN_SECRET_SECTION_SIZE, 0))) {
 		return cn_error_failure("Failed decryption.");
@@ -6002,14 +5650,12 @@ cn_error_t cn_protocol_server_decrypt_connect_token_packet(uint8_t* packet_buffe
 // being one uses an unpredictable hash primitive from libhydrogen while the other uses a simple and
 // fast hash function.
 
-static uint32_t s_is_prime(uint32_t x)
-{
+static uint32_t s_is_prime(uint32_t x) {
 	if ((x == 2) | (x == 3)) return 1;
 	if ((x % 2 == 0) | (x % 3 == 0)) return 0;
 
 	uint32_t divisor = 6;
-	while (divisor * divisor - 2 * divisor + 1 <= x)
-	{
+	while (divisor * divisor - 2 * divisor + 1 <= x) {
 		if (x % (divisor - 1) == 0) return 0;
 		if (x % (divisor + 1) == 0) return 0;
 		divisor += 6;
@@ -6018,17 +5664,14 @@ static uint32_t s_is_prime(uint32_t x)
 	return 1;
 }
 
-static uint32_t s_next_prime(uint32_t a)
-{
-	while (1)
-	{
+static uint32_t s_next_prime(uint32_t a) {
+	while (1) {
 		if (s_is_prime(a)) return a;
 		else ++a;
 	}
 }
 
-void cn_hashtable_init(cn_hashtable_t* table, int key_size, int item_size, int capacity, void* mem_ctx)
-{
+void cn_hashtable_init(cn_hashtable_t* table, int key_size, int item_size, int capacity, void* mem_ctx) {
 	CN_ASSERT(capacity);
 	CN_MEMSET(table, 0, sizeof(cn_hashtable_t));
 
@@ -6038,7 +5681,7 @@ void cn_hashtable_init(cn_hashtable_t* table, int key_size, int item_size, int c
 	table->item_size = item_size;
 	int slots_size = (int)(table->slot_capacity * sizeof(*table->slots));
 	table->slots = (cn_hashtable_slot_t*)CN_ALLOC((size_t)slots_size, mem_ctx);
-	CN_MEMSET(table->slots, 0, (size_t) slots_size);
+	CN_MEMSET(table->slots, 0, (size_t)slots_size);
 
 	hydro_hash_keygen(table->secret_key);
 
@@ -6051,32 +5694,27 @@ void cn_hashtable_init(cn_hashtable_t* table, int key_size, int item_size, int c
 	table->mem_ctx = mem_ctx;
 }
 
-void cn_hashtable_cleanup(cn_hashtable_t* table)
-{
+void cn_hashtable_cleanup(cn_hashtable_t* table) {
 	CN_FREE(table->slots, table->mem_ctx);
 	CN_FREE(table->items_key, table->mem_ctx);
 	CN_MEMSET(table, 0, sizeof(cn_hashtable_t));
 }
 
-static int s_keys_equal(const cn_hashtable_t* table, const void* a, const void* b)
-{
+static int s_keys_equal(const cn_hashtable_t* table, const void* a, const void* b) {
 	return !CN_MEMCMP(a, b, table->key_size);
 }
 
-static void* s_get_key(const cn_hashtable_t* table, int index)
-{
+static void* s_get_key(const cn_hashtable_t* table, int index) {
 	uint8_t* keys = (uint8_t*)table->items_key;
 	return keys + index * table->key_size;
 }
 
-static void* s_get_item(const cn_hashtable_t* table, int index)
-{
+static void* s_get_item(const cn_hashtable_t* table, int index) {
 	uint8_t* items = (uint8_t*)table->items_data;
 	return items + index * table->item_size;
 }
 
-static uint64_t s_calc_hash(const cn_hashtable_t* table, const void* key)
-{
+static uint64_t s_calc_hash(const cn_hashtable_t* table, const void* key) {
 	uint8_t hash_bytes[CN_HASHTABLE_HASH_BYTES];
 	if (hydro_hash_hash(hash_bytes, CN_HASHTABLE_HASH_BYTES, (const uint8_t*)key, table->key_size, CN_PROTOCOL_CONTEXT, table->secret_key) != 0) {
 		CN_ASSERT(0);
@@ -6087,21 +5725,18 @@ static uint64_t s_calc_hash(const cn_hashtable_t* table, const void* key)
 	return hash;
 }
 
-static int cn_hashtable_internal_find_slot(const cn_hashtable_t* table, const void* key)
-{
+static int cn_hashtable_internal_find_slot(const cn_hashtable_t* table, const void* key) {
 	uint64_t hash = s_calc_hash(table, key);
 	int base_slot = (int)(hash % (uint64_t)table->slot_capacity);
 	int base_count = table->slots[base_slot].base_count;
 	int slot = base_slot;
 
-	while (base_count > 0)
-	{
+	while (base_count > 0) {
 		uint64_t slot_hash = table->slots[slot].key_hash;
 
 		if (slot_hash) {
 			int slot_base = (int)(slot_hash % (uint64_t)table->slot_capacity);
-			if (slot_base == base_slot)
-			{
+			if (slot_base == base_slot) {
 				CN_ASSERT(base_count > 0);
 				--base_count;
 				const void* found_key = s_get_key(table, table->slots[slot].item_index);
@@ -6115,8 +5750,7 @@ static int cn_hashtable_internal_find_slot(const cn_hashtable_t* table, const vo
 	return -1;
 }
 
-void* cn_hashtable_insert(cn_hashtable_t* table, const void* key, const void* item)
-{
+void* cn_hashtable_insert(cn_hashtable_t* table, const void* key, const void* item) {
 	CN_ASSERT(cn_hashtable_internal_find_slot(table, key) < 0);
 	uint64_t hash = s_calc_hash(table, key);
 
@@ -6126,8 +5760,7 @@ void* cn_hashtable_insert(cn_hashtable_t* table, const void* key, const void* it
 	int base_count = table->slots[base_slot].base_count;
 	int slot = base_slot;
 	int first_free = slot;
-	while (base_count)
-	{
+	while (base_count) {
 		uint64_t slot_hash = table->slots[slot].key_hash;
 		if (slot_hash == 0 && table->slots[first_free].key_hash != 0) first_free = slot;
 		int slot_base = (int)(slot_hash % (uint64_t)table->slot_capacity);
@@ -6158,8 +5791,7 @@ void* cn_hashtable_insert(cn_hashtable_t* table, const void* key, const void* it
 	return item_dst;
 }
 
-void cn_hashtable_remove(cn_hashtable_t* table, const void* key)
-{
+void cn_hashtable_remove(cn_hashtable_t* table, const void* key) {
 	int slot = cn_hashtable_internal_find_slot(table, key);
 	CN_ASSERT(slot >= 0);
 
@@ -6171,8 +5803,7 @@ void cn_hashtable_remove(cn_hashtable_t* table, const void* key)
 
 	int index = table->slots[slot].item_index;
 	int last_index = table->count - 1;
-	if (index != last_index)
-	{
+	if (index != last_index) {
 		void* dst_key = s_get_key(table, index);
 		void* src_key = s_get_key(table, last_index);
 		CN_MEMCPY(dst_key, src_key, (size_t)table->key_size);
@@ -6185,14 +5816,12 @@ void cn_hashtable_remove(cn_hashtable_t* table, const void* key)
 	--table->count;
 }
 
-void cn_hashtable_clear(cn_hashtable_t* table)
-{
+void cn_hashtable_clear(cn_hashtable_t* table) {
 	table->count = 0;
 	CN_MEMSET(table->slots, 0, sizeof(*table->slots) * table->slot_capacity);
 }
 
-void* cn_hashtable_find(const cn_hashtable_t* table, const void* key)
-{
+void* cn_hashtable_find(const cn_hashtable_t* table, const void* key) {
 	int slot = cn_hashtable_internal_find_slot(table, key);
 	if (slot < 0) return 0;
 
@@ -6200,23 +5829,19 @@ void* cn_hashtable_find(const cn_hashtable_t* table, const void* key)
 	return s_get_item(table, index);
 }
 
-int cn_hashtable_count(const cn_hashtable_t* table)
-{
+int cn_hashtable_count(const cn_hashtable_t* table) {
 	return table->count;
 }
 
-void* cn_hashtable_items(const cn_hashtable_t* table)
-{
+void* cn_hashtable_items(const cn_hashtable_t* table) {
 	return table->items_data;
 }
 
-void* cn_hashtable_keys(const cn_hashtable_t* table)
-{
+void* cn_hashtable_keys(const cn_hashtable_t* table) {
 	return table->items_key;
 }
 
-void cn_hashtable_swap(cn_hashtable_t* table, int index_a, int index_b)
-{
+void cn_hashtable_swap(cn_hashtable_t* table, int index_a, int index_b) {
 	if (index_a < 0 || index_a >= table->count || index_b < 0 || index_b >= table->count) return;
 
 	int slot_a = table->items_slot_index[index_a];
@@ -6243,16 +5868,14 @@ void cn_hashtable_swap(cn_hashtable_t* table, int index_a, int index_b)
 
 // -------------------------------------------------------------------------------------------------
 
-void cn_protocol_connect_token_cache_init(cn_protocol_connect_token_cache_t* cache, int capacity, void* mem_ctx)
-{
+void cn_protocol_connect_token_cache_init(cn_protocol_connect_token_cache_t* cache, int capacity, void* mem_ctx) {
 	cache->capacity = capacity;
 	cn_hashtable_init(&cache->table, CN_PROTOCOL_SIGNATURE_SIZE, sizeof(cn_protocol_connect_token_cache_entry_t), capacity, mem_ctx);
 	cn_list_init(&cache->list);
 	cn_list_init(&cache->free_list);
 	cache->node_memory = (cn_protocol_connect_token_cache_node_t*)CN_ALLOC(sizeof(cn_protocol_connect_token_cache_node_t) * capacity, mem_ctx);
 
-	for (int i = 0; i < capacity; ++i)
-	{
+	for (int i = 0; i < capacity; ++i) {
 		cn_list_node_t* node = &cache->node_memory[i].node;
 		cn_list_init_node(node);
 		cn_list_push_front(&cache->free_list, node);
@@ -6261,15 +5884,13 @@ void cn_protocol_connect_token_cache_init(cn_protocol_connect_token_cache_t* cac
 	cache->mem_ctx = mem_ctx;
 }
 
-void cn_protocol_connect_token_cache_cleanup(cn_protocol_connect_token_cache_t* cache)
-{
+void cn_protocol_connect_token_cache_cleanup(cn_protocol_connect_token_cache_t* cache) {
 	cn_hashtable_cleanup(&cache->table);
 	CN_FREE(cache->node_memory, cache->mem_ctx);
 	cache->node_memory = NULL;
 }
 
-cn_protocol_connect_token_cache_entry_t* cn_protocol_connect_token_cache_find(cn_protocol_connect_token_cache_t* cache, const uint8_t* hmac_bytes)
-{
+cn_protocol_connect_token_cache_entry_t* cn_protocol_connect_token_cache_find(cn_protocol_connect_token_cache_t* cache, const uint8_t* hmac_bytes) {
 	void* entry_ptr = cn_hashtable_find(&cache->table, hmac_bytes);
 	if (entry_ptr) {
 		cn_protocol_connect_token_cache_entry_t* entry = (cn_protocol_connect_token_cache_entry_t*)entry_ptr;
@@ -6282,8 +5903,7 @@ cn_protocol_connect_token_cache_entry_t* cn_protocol_connect_token_cache_find(cn
 	}
 }
 
-void cn_protocol_connect_token_cache_add(cn_protocol_connect_token_cache_t* cache, const uint8_t* hmac_bytes)
-{
+void cn_protocol_connect_token_cache_add(cn_protocol_connect_token_cache_t* cache, const uint8_t* hmac_bytes) {
 	cn_protocol_connect_token_cache_entry_t entry;
 
 	int table_count = cn_hashtable_count(&cache->table);
@@ -6310,33 +5930,27 @@ void cn_protocol_connect_token_cache_add(cn_protocol_connect_token_cache_t* cach
 
 // -------------------------------------------------------------------------------------------------
 
-void cn_protocol_encryption_map_init(cn_protocol_encryption_map_t* map, void* mem_ctx)
-{
+void cn_protocol_encryption_map_init(cn_protocol_encryption_map_t* map, void* mem_ctx) {
 	cn_hashtable_init(&map->table, sizeof(cn_endpoint_t), sizeof(cn_protocol_encryption_state_t), CN_PROTOCOL_ENCRYPTION_STATES_MAX, mem_ctx);
 }
 
-void cn_protocol_encryption_map_cleanup(cn_protocol_encryption_map_t* map)
-{
+void cn_protocol_encryption_map_cleanup(cn_protocol_encryption_map_t* map) {
 	cn_hashtable_cleanup(&map->table);
 }
 
-void cn_protocol_encryption_map_clear(cn_protocol_encryption_map_t* map)
-{
+void cn_protocol_encryption_map_clear(cn_protocol_encryption_map_t* map) {
 	cn_hashtable_clear(&map->table);
 }
 
-int cn_protocol_encryption_map_count(cn_protocol_encryption_map_t* map)
-{
+int cn_protocol_encryption_map_count(cn_protocol_encryption_map_t* map) {
 	return cn_hashtable_count(&map->table);
 }
 
-void cn_protocol_encryption_map_insert(cn_protocol_encryption_map_t* map, cn_endpoint_t endpoint, const cn_protocol_encryption_state_t* state)
-{
+void cn_protocol_encryption_map_insert(cn_protocol_encryption_map_t* map, cn_endpoint_t endpoint, const cn_protocol_encryption_state_t* state) {
 	cn_hashtable_insert(&map->table, &endpoint, state);
 }
 
-cn_protocol_encryption_state_t* cn_protocol_encryption_map_find(cn_protocol_encryption_map_t* map, cn_endpoint_t endpoint)
-{
+cn_protocol_encryption_state_t* cn_protocol_encryption_map_find(cn_protocol_encryption_map_t* map, cn_endpoint_t endpoint) {
 	void* ptr = cn_hashtable_find(&map->table, &endpoint);
 	if (ptr) {
 		cn_protocol_encryption_state_t* state = (cn_protocol_encryption_state_t*)ptr;
@@ -6347,30 +5961,25 @@ cn_protocol_encryption_state_t* cn_protocol_encryption_map_find(cn_protocol_encr
 	}
 }
 
-void cn_protocol_encryption_map_remove(cn_protocol_encryption_map_t* map, cn_endpoint_t endpoint)
-{
+void cn_protocol_encryption_map_remove(cn_protocol_encryption_map_t* map, cn_endpoint_t endpoint) {
 	cn_hashtable_remove(&map->table, &endpoint);
 }
 
-cn_endpoint_t* cn_protocol_encryption_map_get_endpoints(cn_protocol_encryption_map_t* map)
-{
+cn_endpoint_t* cn_protocol_encryption_map_get_endpoints(cn_protocol_encryption_map_t* map) {
 	return (cn_endpoint_t*)cn_hashtable_keys(&map->table);
 }
 
-cn_protocol_encryption_state_t* cn_protocol_encryption_map_get_states(cn_protocol_encryption_map_t* map)
-{
+cn_protocol_encryption_state_t* cn_protocol_encryption_map_get_states(cn_protocol_encryption_map_t* map) {
 	return (cn_protocol_encryption_state_t*)cn_hashtable_items(&map->table);
 }
 
-void cn_protocol_encryption_map_look_for_timeouts_or_expirations(cn_protocol_encryption_map_t* map, double dt, uint64_t time)
-{
+void cn_protocol_encryption_map_look_for_timeouts_or_expirations(cn_protocol_encryption_map_t* map, double dt, uint64_t time) {
 	int index = 0;
 	int count = cn_protocol_encryption_map_count(map);
 	cn_endpoint_t* endpoints = cn_protocol_encryption_map_get_endpoints(map);
 	cn_protocol_encryption_state_t* states = cn_protocol_encryption_map_get_states(map);
 
-	while (index < count)
-	{
+	while (index < count) {
 		cn_protocol_encryption_state_t* state = states + index;
 		state->last_packet_recieved_time += dt;
 		int timed_out = state->last_packet_recieved_time >= state->handshake_timeout;
@@ -6386,10 +5995,8 @@ void cn_protocol_encryption_map_look_for_timeouts_or_expirations(cn_protocol_enc
 
 // -------------------------------------------------------------------------------------------------
 
-static CN_INLINE const char* s_protocol_client_state_str(cn_protocol_client_state_t state)
-{
-	switch (state)
-	{
+static CN_INLINE const char* s_protocol_client_state_str(cn_protocol_client_state_t state) {
+	switch (state) {
 	case CN_PROTOCOL_CLIENT_STATE_CONNECT_TOKEN_EXPIRED: return "CONNECT_TOKEN_EXPIRED";
 	case CN_PROTOCOL_CLIENT_STATE_INVALID_CONNECT_TOKEN: return "INVALID_CONNECT_TOKEN";
 	case CN_PROTOCOL_CLIENT_STATE_CONNECTION_TIMED_OUT: return "CONNECTION_TIMED_OUT";
@@ -6405,15 +6012,13 @@ static CN_INLINE const char* s_protocol_client_state_str(cn_protocol_client_stat
 	return NULL;
 }
 
-static void s_protocol_client_set_state(cn_protocol_client_t* client, cn_protocol_client_state_t state)
-{
+static void s_protocol_client_set_state(cn_protocol_client_t* client, cn_protocol_client_state_t state) {
 	client->state = state;
 	//log(CN_LOG_LEVEL_INFORMATIONAL, "Protocol Client: Switching to state %s.", s_protocol_client_state_str(state));
 }
 
-cn_protocol_client_t* cn_protocol_client_create(uint16_t port, uint64_t application_id, bool use_ipv6, void* user_allocator_context)
-{
-	cn_protocol_client_t* client = (cn_protocol_client_t*)CN_ALLOC(sizeof(cn_protocol_client_t), app->mem_ctx);
+cn_protocol_client_t* cn_protocol_client_create(uint16_t port, uint64_t application_id, bool use_ipv6, void* user_allocator_context) {
+	cn_protocol_client_t* client = (cn_protocol_client_t*)CN_ALLOC(sizeof(cn_protocol_client_t), user_allocator_context);
 	CN_MEMSET(client, 0, sizeof(cn_protocol_client_t));
 	s_protocol_client_set_state(client, CN_PROTOCOL_CLIENT_STATE_DISCONNECTED);
 	client->use_ipv6 = use_ipv6;
@@ -6423,23 +6028,20 @@ cn_protocol_client_t* cn_protocol_client_create(uint16_t port, uint64_t applicat
 	return client;
 }
 
-void cn_protocol_client_destroy(cn_protocol_client_t* client)
-{
+void cn_protocol_client_destroy(cn_protocol_client_t* client) {
 	// TODO: Detect if disconnect was not called yet.
 	cn_simulator_destroy(client->sim);
 	cn_circular_buffer_free(&client->packet_queue);
 	CN_FREE(client, client->mem_ctx);
 }
 
-typedef struct cn_protocol_payload_t
-{
+typedef struct cn_protocol_payload_t {
 	uint64_t sequence;
 	int size;
 	void* data;
 } cn_protocol_payload_t;
 
-cn_error_t cn_protocol_client_connect(cn_protocol_client_t* client, const uint8_t* connect_token)
-{
+cn_error_t cn_protocol_client_connect(cn_protocol_client_t* client, const uint8_t* connect_token) {
 	uint8_t* connect_token_packet = cn_protocol_client_read_connect_token_from_web_service(
 		(uint8_t*)connect_token,
 		client->application_id,
@@ -6466,15 +6068,12 @@ cn_error_t cn_protocol_client_connect(cn_protocol_client_t* client, const uint8_
 	return cn_error_success();
 }
 
-static CN_INLINE cn_endpoint_t s_protocol_server_endpoint(cn_protocol_client_t* client)
-{
+static CN_INLINE cn_endpoint_t s_protocol_server_endpoint(cn_protocol_client_t* client) {
 	return client->connect_token.endpoints[client->server_endpoint_index];
 }
 
-static CN_INLINE const char* s_protocol_packet_str(uint8_t type)
-{
-	switch (type)
-	{
+static CN_INLINE const char* s_protocol_packet_str(uint8_t type) {
+	switch (type) {
 	case CN_PROTOCOL_PACKET_TYPE_CONNECT_TOKEN: return "CONNECT_TOKEN";
 	case CN_PROTOCOL_PACKET_TYPE_CONNECTION_ACCEPTED: return "CONNECTION_ACCEPTED";
 	case CN_PROTOCOL_PACKET_TYPE_CONNECTION_DENIED: return "CONNECTION_DENIED";
@@ -6488,8 +6087,7 @@ static CN_INLINE const char* s_protocol_packet_str(uint8_t type)
 	return NULL;
 }
 
-static void s_protocol_client_send(cn_protocol_client_t* client, void* packet)
-{
+static void s_protocol_client_send(cn_protocol_client_t* client, void* packet) {
 	int sz = cn_protocol_packet_write(packet, client->buffer, client->sequence++, &client->connect_token.client_to_server_key);
 
 	if (sz >= 73) {
@@ -6499,8 +6097,7 @@ static void s_protocol_client_send(cn_protocol_client_t* client, void* packet)
 	}
 }
 
-bool cn_protocol_client_get_packet(cn_protocol_client_t* client, void** data, int* size, uint64_t* sequence)
-{
+bool cn_protocol_client_get_packet(cn_protocol_client_t* client, void** data, int* size, uint64_t* sequence) {
 	cn_protocol_payload_t payload;
 	if (cn_circular_buffer_pull(&client->packet_queue, &payload, sizeof(cn_protocol_payload_t)) < 0) {
 		return false;
@@ -6513,14 +6110,12 @@ bool cn_protocol_client_get_packet(cn_protocol_client_t* client, void** data, in
 	return true;
 }
 
-void cn_protocol_client_free_packet(cn_protocol_client_t* client, void* packet)
-{
+void cn_protocol_client_free_packet(cn_protocol_client_t* client, void* packet) {
 	cn_protocol_packet_payload_t* payload_packet = (cn_protocol_packet_payload_t*)((uint8_t*)packet - CN_OFFSET_OF(cn_protocol_packet_payload_t, payload));
 	cn_protocol_packet_allocator_free(NULL, (cn_protocol_packet_type_t)payload_packet->packet_type, payload_packet);
 }
 
-static void s_protocol_disconnect(cn_protocol_client_t* client, cn_protocol_client_state_t state, int send_packets)
-{
+static void s_protocol_disconnect(cn_protocol_client_t* client, cn_protocol_client_state_t state, int send_packets) {
 	void* packet = NULL;
 	while (cn_protocol_client_get_packet(client, &packet, NULL, NULL)) {
 		cn_protocol_client_free_packet(client, packet);
@@ -6529,8 +6124,7 @@ static void s_protocol_disconnect(cn_protocol_client_t* client, cn_protocol_clie
 	if (send_packets) {
 		cn_protocol_packet_disconnect_t packet;
 		packet.packet_type = CN_PROTOCOL_PACKET_TYPE_DISCONNECT;
-		for (int i = 0; i < CN_PROTOCOL_REDUNDANT_DISCONNECT_PACKET_COUNT; ++i)
-		{
+		for (int i = 0; i < CN_PROTOCOL_REDUNDANT_DISCONNECT_PACKET_COUNT; ++i) {
 			s_protocol_client_send(client, &packet);
 		}
 	}
@@ -6541,18 +6135,15 @@ static void s_protocol_disconnect(cn_protocol_client_t* client, cn_protocol_clie
 	s_protocol_client_set_state(client, state);
 }
 
-void cn_protocol_client_disconnect(cn_protocol_client_t* client)
-{
+void cn_protocol_client_disconnect(cn_protocol_client_t* client) {
 	if (client->state <= 0) return;
 	s_protocol_disconnect(client, CN_PROTOCOL_CLIENT_STATE_DISCONNECTED, 1);
 }
 
-static void s_protocol_receive_packets(cn_protocol_client_t* client)
-{
+static void s_protocol_receive_packets(cn_protocol_client_t* client) {
 	uint8_t* buffer = client->buffer;
 
-	while (1)
-	{
+	while (1) {
 		// Read packet from UDP stack, and open it.
 		cn_endpoint_t from;
 		int sz = cn_socket_receive(&client->socket, &from, buffer, CN_PROTOCOL_PACKET_SIZE_MAX);
@@ -6571,8 +6162,7 @@ static void s_protocol_receive_packets(cn_protocol_client_t* client)
 			continue;
 		}
 
-		switch (type)
-		{
+		switch (type) {
 		case CN_PROTOCOL_PACKET_TYPE_CONNECT_TOKEN: // fall-thru
 		case CN_PROTOCOL_PACKET_TYPE_CHALLENGE_RESPONSE:
 			continue;
@@ -6586,8 +6176,7 @@ static void s_protocol_receive_packets(cn_protocol_client_t* client)
 		int free_packet = 1;
 		int should_break = 0;
 
-		switch (client->state)
-		{
+		switch (client->state) {
 		case CN_PROTOCOL_CLIENT_STATE_SENDING_CONNECTION_REQUEST:
 			if (type == CN_PROTOCOL_PACKET_TYPE_CHALLENGE_REQUEST) {
 				cn_protocol_packet_challenge_t* packet = (cn_protocol_packet_challenge_t*)packet_ptr;
@@ -6663,10 +6252,8 @@ static void s_protocol_receive_packets(cn_protocol_client_t* client)
 	}
 }
 
-static void s_protocol_send_packets(cn_protocol_client_t* client)
-{
-	switch (client->state)
-	{
+static void s_protocol_send_packets(cn_protocol_client_t* client) {
+	switch (client->state) {
 	case CN_PROTOCOL_CLIENT_STATE_SENDING_CONNECTION_REQUEST:
 		if (client->last_packet_sent_time >= CN_PROTOCOL_SEND_RATE) {
 			s_protocol_client_send(client, client->connect_token_packet);
@@ -6696,8 +6283,7 @@ static void s_protocol_send_packets(cn_protocol_client_t* client)
 	}
 }
 
-static int s_protocol_goto_next_server(cn_protocol_client_t* client)
-{
+static int s_protocol_goto_next_server(cn_protocol_client_t* client) {
 	if (client->server_endpoint_index + 1 == client->connect_token.endpoint_count) {
 		s_protocol_disconnect(client, client->goto_next_server_tentative_state, 0);
 		//log(CN_LOG_LEVEL_INFORMATIONAL, "Protocol Client: Unable to connect to any server in the server list.");
@@ -6719,8 +6305,7 @@ static int s_protocol_goto_next_server(cn_protocol_client_t* client)
 	return 1;
 }
 
-void cn_protocol_client_update(cn_protocol_client_t* client, double dt, uint64_t current_time)
-{
+void cn_protocol_client_update(cn_protocol_client_t* client, double dt, uint64_t current_time) {
 	if (client->state <= 0) {
 		return;
 	}
@@ -6746,8 +6331,7 @@ void cn_protocol_client_update(cn_protocol_client_t* client, double dt, uint64_t
 		} else if (timeout | client->goto_next_server) {
 			if (s_protocol_goto_next_server(client)) {
 				return;
-			}
-			else if (client->state == CN_PROTOCOL_CLIENT_STATE_SENDING_CONNECTION_REQUEST) {
+			} else if (client->state == CN_PROTOCOL_CLIENT_STATE_SENDING_CONNECTION_REQUEST) {
 				s_protocol_disconnect(client, CN_PROTOCOL_CLIENT_STATE_CONNECTION_REQUEST_TIMED_OUT, 1);
 			} else if (client->state == CN_PROTOCOL_CLIENT_STATE_SENDING_CHALLENGE_RESPONSE) {
 				s_protocol_disconnect(client, CN_PROTOCOL_CLIENT_STATE_CHALLENGED_RESPONSE_TIMED_OUT, 1);
@@ -6762,8 +6346,7 @@ void cn_protocol_client_update(cn_protocol_client_t* client, double dt, uint64_t
 	}
 }
 
-cn_error_t cn_protocol_client_send(cn_protocol_client_t* client, const void* data, int size)
-{
+cn_error_t cn_protocol_client_send(cn_protocol_client_t* client, const void* data, int size) {
 	if (size < 1) return cn_error_failure("`size` can not be negative.");
 	if (size > CN_PROTOCOL_PACKET_PAYLOAD_MAX) return cn_error_failure("`size` exceeded `CN_PROTOCOL_PACKET_PAYLOAD_MAX`.");
 	cn_protocol_packet_payload_t packet;
@@ -6774,33 +6357,27 @@ cn_error_t cn_protocol_client_send(cn_protocol_client_t* client, const void* dat
 	return cn_error_success();
 }
 
-cn_protocol_client_state_t cn_protocol_client_get_state(cn_protocol_client_t* client)
-{
+cn_protocol_client_state_t cn_protocol_client_get_state(cn_protocol_client_t* client) {
 	return client->state;
 }
 
-uint64_t cn_protocol_client_get_id(cn_protocol_client_t* client)
-{
+uint64_t cn_protocol_client_get_id(cn_protocol_client_t* client) {
 	return client->client_id;
 }
 
-uint32_t cn_protocol_client_get_max_clients(cn_protocol_client_t* client)
-{
+uint32_t cn_protocol_client_get_max_clients(cn_protocol_client_t* client) {
 	return client->max_clients;
 }
 
-cn_endpoint_t cn_protocol_client_get_server_address(cn_protocol_client_t* client)
-{
+cn_endpoint_t cn_protocol_client_get_server_address(cn_protocol_client_t* client) {
 	return s_protocol_server_endpoint(client);
 }
 
-uint16_t cn_protocol_client_get_port(cn_protocol_client_t* client)
-{
+uint16_t cn_protocol_client_get_port(cn_protocol_client_t* client) {
 	return client->socket.endpoint.port;
 }
 
-void cn_protocol_client_enable_network_simulator(cn_protocol_client_t* client, double latency, double jitter, double drop_chance, double duplicate_chance)
-{
+void cn_protocol_client_enable_network_simulator(cn_protocol_client_t* client, double latency, double jitter, double drop_chance, double duplicate_chance) {
 	cn_simulator_t* sim = cn_simulator_create(&client->socket, client->mem_ctx);
 	sim->latency = latency;
 	sim->jitter = jitter;
@@ -6831,18 +6408,15 @@ void cn_protocol_client_enable_network_simulator(cn_protocol_client_t* client, d
 typedef uint64_t cn_handle_t;
 #define CN_INVALID_HANDLE (~0ULL)
 
-typedef union cn_handle_entry_t
-{
-	struct
-	{
+typedef union cn_handle_entry_t {
+	struct {
 		uint64_t user_index : 32;
 		uint64_t generation : 32;
 	} data;
 	uint64_t val;
 } cn_handle_entry_t;
 
-typedef struct cn_handle_allocator_t
-{
+typedef struct cn_handle_allocator_t {
 	uint32_t freelist;
 	int handles_capacity;
 	int handles_count;
@@ -6850,11 +6424,9 @@ typedef struct cn_handle_allocator_t
 	void* mem_ctx;
 } cn_handle_allocator_t;
 
-static void s_add_elements_to_freelist(cn_handle_allocator_t* table, int first_index, int last_index)
-{
+static void s_add_elements_to_freelist(cn_handle_allocator_t* table, int first_index, int last_index) {
 	cn_handle_entry_t* handles = table->handles;
-	for (int i = first_index; i < last_index; ++i)
-	{
+	for (int i = first_index; i < last_index; ++i) {
 		cn_handle_entry_t handle;
 		handle.data.user_index = i + 1;
 		handle.data.generation = 0;
@@ -6869,8 +6441,7 @@ static void s_add_elements_to_freelist(cn_handle_allocator_t* table, int first_i
 	table->freelist = first_index;
 }
 
-cn_handle_allocator_t* cn_handle_allocator_create(int initial_capacity, void* user_allocator_context)
-{
+cn_handle_allocator_t* cn_handle_allocator_create(int initial_capacity, void* user_allocator_context) {
 	cn_handle_allocator_t* table = (cn_handle_allocator_t*)CN_ALLOC(sizeof(cn_handle_allocator_t), user_allocator_context);
 	if (!table) return NULL;
 	table->freelist = ~0;
@@ -6892,17 +6463,15 @@ cn_handle_allocator_t* cn_handle_allocator_create(int initial_capacity, void* us
 	return table;
 }
 
-void cn_handle_allocator_destroy(cn_handle_allocator_t* table)
-{
+void cn_handle_allocator_destroy(cn_handle_allocator_t* table) {
 	if (!table) return;
 	void* mem_ctx = table->mem_ctx;
 	CN_FREE(table->handles, mem_ctx);
 	CN_FREE(table, mem_ctx);
 }
 
-cn_handle_t cn_handle_allocator_alloc(cn_handle_allocator_t* table, uint32_t index)
-{
-	int freelist_index = table->freelist;
+cn_handle_t cn_handle_allocator_alloc(cn_handle_allocator_t* table, uint32_t index) {
+	uint32_t freelist_index = table->freelist;
 	if (freelist_index == UINT32_MAX) {
 		int first_index = table->handles_capacity;
 		if (!first_index) first_index = 1;
@@ -6923,13 +6492,11 @@ cn_handle_t cn_handle_allocator_alloc(cn_handle_allocator_t* table, uint32_t ind
 	return handle;
 }
 
-static CN_INLINE uint32_t s_table_index(cn_handle_t handle)
-{
+static CN_INLINE uint32_t s_table_index(cn_handle_t handle) {
 	return (uint32_t)((handle & 0xFFFFFFFF00000000ULL) >> 32);
 }
 
-uint32_t cn_handle_allocator_get_index(cn_handle_allocator_t* table, cn_handle_t handle)
-{
+uint32_t cn_handle_allocator_get_index(cn_handle_allocator_t* table, cn_handle_t handle) {
 	cn_handle_entry_t* handles = table->handles;
 	uint32_t table_index = s_table_index(handle);
 	uint64_t generation = handle & 0xFFFFFFFF;
@@ -6937,8 +6504,7 @@ uint32_t cn_handle_allocator_get_index(cn_handle_allocator_t* table, cn_handle_t
 	return (uint32_t)handles[table_index].data.user_index;
 }
 
-void cn_handle_allocator_update_index(cn_handle_allocator_t* table, cn_handle_t handle, uint32_t index)
-{
+void cn_handle_allocator_update_index(cn_handle_allocator_t* table, cn_handle_t handle, uint32_t index) {
 	cn_handle_entry_t* handles = table->handles;
 	uint32_t table_index = s_table_index(handle);
 	uint64_t generation = handle & 0xFFFFFFFF;
@@ -6946,8 +6512,7 @@ void cn_handle_allocator_update_index(cn_handle_allocator_t* table, cn_handle_t 
 	handles[table_index].data.user_index = index;
 }
 
-void cn_handle_allocator_free(cn_handle_allocator_t* table, cn_handle_t handle)
-{
+void cn_handle_allocator_free(cn_handle_allocator_t* table, cn_handle_t handle) {
 	// Push handle onto freelist.
 	cn_handle_entry_t* handles = table->handles;
 	uint32_t table_index = s_table_index(handle);
@@ -6957,8 +6522,7 @@ void cn_handle_allocator_free(cn_handle_allocator_t* table, cn_handle_t handle)
 	table->handles_count--;
 }
 
-int cn_handle_allocator_is_handle_valid(cn_handle_allocator_t* table, cn_handle_t handle)
-{
+int cn_handle_allocator_is_handle_valid(cn_handle_allocator_t* table, cn_handle_t handle) {
 	cn_handle_entry_t* handles = table->handles;
 	uint32_t table_index = s_table_index(handle);
 	uint64_t generation = handle & 0xFFFFFFFF;
@@ -6967,8 +6531,7 @@ int cn_handle_allocator_is_handle_valid(cn_handle_allocator_t* table, cn_handle_
 
 // -------------------------------------------------------------------------------------------------
 
-cn_protocol_server_t* cn_protocol_server_create(uint64_t application_id, const cn_crypto_sign_public_t* public_key, const cn_crypto_sign_secret_t* secret_key, void* mem_ctx)
-{
+cn_protocol_server_t* cn_protocol_server_create(uint64_t application_id, const cn_crypto_sign_public_t* public_key, const cn_crypto_sign_secret_t* secret_key, void* mem_ctx) {
 	cn_protocol_server_t* server = (cn_protocol_server_t*)CN_ALLOC(sizeof(cn_protocol_server_t), mem_ctx);
 	CN_MEMSET(server, 0, sizeof(cn_protocol_server_t));
 
@@ -6983,19 +6546,16 @@ cn_protocol_server_t* cn_protocol_server_create(uint64_t application_id, const c
 	return server;
 }
 
-void cn_protocol_server_destroy(cn_protocol_server_t* server)
-{
+void cn_protocol_server_destroy(cn_protocol_server_t* server) {
 	cn_simulator_destroy(server->sim);
 	cn_protocol_packet_allocator_destroy(server->packet_allocator);
 	cn_circular_buffer_free(&server->event_queue);
 	CN_FREE(server, server->mem_ctx);
 }
 
-cn_error_t cn_protocol_server_start(cn_protocol_server_t* server, const char* address, uint32_t connection_timeout)
-{
+cn_error_t cn_protocol_server_start(cn_protocol_server_t* server, const char* address, uint32_t connection_timeout) {
 	int cleanup_map = 0;
 	int cleanup_cache = 0;
-	int cleanup_handles = 0;
 	int cleanup_socket = 0;
 	int cleanup_endpoint_table = 0;
 	int cleanup_client_id_table = 0;
@@ -7028,13 +6588,11 @@ cn_error_t cn_protocol_server_start(cn_protocol_server_t* server, const char* ad
 	return cn_error_success();
 }
 
-static CN_INLINE int s_protocol_server_event_pull(cn_protocol_server_t* server, cn_protocol_server_event_t* event)
-{
+static CN_INLINE int s_protocol_server_event_pull(cn_protocol_server_t* server, cn_protocol_server_event_t* event) {
 	return cn_circular_buffer_pull(&server->event_queue, event, sizeof(cn_protocol_server_event_t));
 }
 
-static CN_INLINE int s_protocol_server_event_push(cn_protocol_server_t* server, cn_protocol_server_event_t* event)
-{
+static CN_INLINE int s_protocol_server_event_push(cn_protocol_server_t* server, cn_protocol_server_event_t* event) {
 	if (cn_circular_buffer_push(&server->event_queue, event, sizeof(cn_protocol_server_event_t)) < 0) {
 		if (cn_circular_buffer_grow(&server->event_queue, server->event_queue.capacity * 2) < 0) {
 			return -1;
@@ -7045,10 +6603,8 @@ static CN_INLINE int s_protocol_server_event_push(cn_protocol_server_t* server, 
 	}
 }
 
-static void s_protocol_server_disconnect_sequence(cn_protocol_server_t* server, uint32_t index)
-{
-	for (int i = 0; i < CN_PROTOCOL_DISCONNECT_REDUNDANT_PACKET_COUNT; ++i)
-	{
+static void s_protocol_server_disconnect_sequence(cn_protocol_server_t* server, uint32_t index) {
+	for (int i = 0; i < CN_PROTOCOL_DISCONNECT_REDUNDANT_PACKET_COUNT; ++i) {
 		cn_protocol_packet_disconnect_t packet;
 		packet.packet_type = CN_PROTOCOL_PACKET_TYPE_DISCONNECT;
 		if (cn_protocol_packet_write(&packet, server->buffer, server->client_sequence[index]++, server->client_server_to_client_key + index) == 73) {
@@ -7057,8 +6613,7 @@ static void s_protocol_server_disconnect_sequence(cn_protocol_server_t* server, 
 	}
 }
 
-static void s_protocol_server_disconnect_client(cn_protocol_server_t* server, uint32_t index, bool send_packets)
-{
+static void s_protocol_server_disconnect_client(cn_protocol_server_t* server, uint32_t index, bool send_packets) {
 	if (!server->client_is_connected[index]) {
 		return;
 	}
@@ -7081,19 +6636,16 @@ static void s_protocol_server_disconnect_client(cn_protocol_server_t* server, ui
 	s_protocol_server_event_push(server, &event);
 }
 
-bool cn_protocol_server_pop_event(cn_protocol_server_t* server, cn_protocol_server_event_t* event)
-{
+bool cn_protocol_server_pop_event(cn_protocol_server_t* server, cn_protocol_server_event_t* event) {
 	return s_protocol_server_event_pull(server, event) ? false : true;
 }
 
-void cn_protocol_server_free_packet(cn_protocol_server_t* server, void* packet)
-{
+void cn_protocol_server_free_packet(cn_protocol_server_t* server, void* packet) {
 	cn_protocol_packet_payload_t* payload_packet = (cn_protocol_packet_payload_t*)((uint8_t*)packet - CN_OFFSET_OF(cn_protocol_packet_payload_t, payload));
 	cn_protocol_packet_allocator_free(server->packet_allocator, (cn_protocol_packet_type_t)payload_packet->packet_type, payload_packet);
 }
 
-void cn_protocol_server_stop(cn_protocol_server_t* server)
-{
+void cn_protocol_server_stop(cn_protocol_server_t* server) {
 	server->running = false;
 
 	for (int i = 0; i < CN_PROTOCOL_SERVER_MAX_CLIENTS; ++i) {
@@ -7101,8 +6653,7 @@ void cn_protocol_server_stop(cn_protocol_server_t* server)
 	}
 
 	// Free any lingering payload packets.
-	while (1)
-	{
+	while (1) {
 		cn_protocol_server_event_t event;
 		if (s_protocol_server_event_pull(server, &event) < 0) break;
 		if (event.type == CN_PROTOCOL_SERVER_EVENT_PAYLOAD_PACKET) {
@@ -7124,20 +6675,18 @@ void cn_protocol_server_stop(cn_protocol_server_t* server)
 		double duplicate_chance = server->sim->duplicate_chance;
 		cn_simulator_destroy(server->sim);
 		server->sim = cn_simulator_create(&server->socket, server->mem_ctx);
-		server->sim->latency = server->sim->latency;
-		server->sim->jitter = server->sim->jitter;
-		server->sim->drop_chance = server->sim->drop_chance;
-		server->sim->duplicate_chance = server->sim->duplicate_chance;
+		server->sim->latency = latency;
+		server->sim->jitter = jitter;
+		server->sim->drop_chance = drop_chance;
+		server->sim->duplicate_chance = duplicate_chance;
 	}
 }
 
-bool cn_protocol_server_running(cn_protocol_server_t* server)
-{
+bool cn_protocol_server_running(cn_protocol_server_t* server) {
 	return server->running;
 }
 
-static void s_protocol_server_connect_client(cn_protocol_server_t* server, cn_endpoint_t endpoint, cn_protocol_encryption_state_t* state)
-{
+static void s_protocol_server_connect_client(cn_protocol_server_t* server, cn_endpoint_t endpoint, cn_protocol_encryption_state_t* state) {
 	int index = -1;
 	for (int i = 0; i < CN_PROTOCOL_SERVER_MAX_CLIENTS; ++i) {
 		if (!server->client_is_connected[i]) {
@@ -7184,12 +6733,10 @@ static void s_protocol_server_connect_client(cn_protocol_server_t* server, cn_en
 	}
 }
 
-static void s_protocol_server_receive_packets(cn_protocol_server_t* server)
-{
+static void s_protocol_server_receive_packets(cn_protocol_server_t* server) {
 	uint8_t* buffer = server->buffer;
 
-	while (1)
-	{
+	while (1) {
 		cn_endpoint_t from;
 		int sz = cn_socket_receive(&server->socket, &from, buffer, CN_PROTOCOL_PACKET_SIZE_MAX);
 		if (!sz) break;
@@ -7203,8 +6750,7 @@ static void s_protocol_server_receive_packets(cn_protocol_server_t* server)
 			continue;
 		}
 
-		switch (type)
-		{
+		switch (type) {
 		case CN_PROTOCOL_PACKET_TYPE_CONNECTION_ACCEPTED: // fall-thru
 		case CN_PROTOCOL_PACKET_TYPE_CONNECTION_DENIED: // fall-thru
 		case CN_PROTOCOL_PACKET_TYPE_CHALLENGE_REQUEST:
@@ -7223,8 +6769,7 @@ static void s_protocol_server_receive_packets(cn_protocol_server_t* server)
 
 			cn_endpoint_t server_endpoint = server->socket.endpoint;
 			int found = 0;
-			for (int i = 0; i < token.endpoint_count; ++i)
-			{
+			for (int i = 0; i < token.endpoint_count; ++i) {
 				if (cn_endpoint_equals(server_endpoint, token.endpoints[i])) {
 					found = 1;
 					break;
@@ -7271,7 +6816,7 @@ static void s_protocol_server_receive_packets(cn_protocol_server_t* server)
 			cn_protocol_replay_buffer_t* replay_buffer = NULL;
 			const cn_crypto_key_t* client_to_server_key;
 			cn_protocol_encryption_state_t* state = NULL;
-			uint32_t index = ~0;
+			uint32_t index = ~0u;
 
 			int endpoint_already_connected = !!client_id_ptr;
 			if (endpoint_already_connected) {
@@ -7280,7 +6825,7 @@ static void s_protocol_server_receive_packets(cn_protocol_server_t* server)
 					continue;
 				}
 
-				index = (uint32_t)*(int*)cn_hashtable_find(&server->client_id_table, client_id_ptr);
+				index = (uint32_t) * (int*)cn_hashtable_find(&server->client_id_table, client_id_ptr);
 				replay_buffer = server->client_replay_buffer + index;
 				client_to_server_key = server->client_client_to_server_key + index;
 			} else {
@@ -7299,17 +6844,16 @@ static void s_protocol_server_receive_packets(cn_protocol_server_t* server)
 
 			int free_packet = 1;
 
-			switch (type)
-			{
+			switch (type) {
 			case CN_PROTOCOL_PACKET_TYPE_KEEPALIVE:
-				if (index == ~0) break;
+				if (index == ~0u) break;
 				server->client_last_packet_received_time[index] = 0;
 				if (!server->client_is_confirmed[index]) //log(CN_LOG_LEVEL_INFORMATIONAL, "Protocol Server: Client %" PRIu64 " is now *confirmed*.", server->client_id[index]);
-				server->client_is_confirmed[index] = 1;
+					server->client_is_confirmed[index] = 1;
 				break;
 
 			case CN_PROTOCOL_PACKET_TYPE_DISCONNECT:
-				if (index == ~0) break;
+				if (index == ~0u) break;
 				//log(CN_LOG_LEVEL_INFORMATIONAL, "Protocol Server: Client %" PRIu64 " has sent the server a DISCONNECT packet.", server->client_id[index]);
 				s_protocol_server_disconnect_client(server, index, 0);
 				break;
@@ -7332,10 +6876,10 @@ static void s_protocol_server_receive_packets(cn_protocol_server_t* server)
 			}	break;
 
 			case CN_PROTOCOL_PACKET_TYPE_PAYLOAD:
-				if (index == ~0) break;
+				if (index == ~0u) break;
 				server->client_last_packet_received_time[index] = 0;
 				if (!server->client_is_confirmed[index]) //log(CN_LOG_LEVEL_INFORMATIONAL, "Protocol Server: Client %" PRIu64 " is now *confirmed*.", server->client_id[index]);
-				server->client_is_confirmed[index] = 1;
+					server->client_is_confirmed[index] = 1;
 				free_packet = 0;
 				cn_protocol_packet_payload_t* packet = (cn_protocol_packet_payload_t*)packet_ptr;
 				cn_protocol_server_event_t event;
@@ -7357,8 +6901,7 @@ static void s_protocol_server_receive_packets(cn_protocol_server_t* server)
 	}
 }
 
-static void s_protocol_server_send_packets(cn_protocol_server_t* server, double dt)
-{
+static void s_protocol_server_send_packets(cn_protocol_server_t* server, double dt) {
 	CN_ASSERT(server->running);
 
 	// Send challenge request packets.
@@ -7368,8 +6911,7 @@ static void s_protocol_server_send_packets(cn_protocol_server_t* server, double 
 	uint8_t* buffer = server->buffer;
 	cn_socket_t* the_socket = &server->socket;
 	cn_simulator_t* sim = server->sim;
-	for (int i = 0; i < state_count; ++i)
-	{
+	for (int i = 0; i < state_count; ++i) {
 		cn_protocol_encryption_state_t* state = states + i;
 		state->last_packet_sent_time += dt;
 
@@ -7434,14 +6976,12 @@ static void s_protocol_server_send_packets(cn_protocol_server_t* server, double 
 	}
 }
 
-void cn_protocol_server_disconnect_client(cn_protocol_server_t* server, int client_index, bool notify_client)
-{
+void cn_protocol_server_disconnect_client(cn_protocol_server_t* server, int client_index, bool notify_client) {
 	CN_ASSERT(server->client_count >= 1);
 	s_protocol_server_disconnect_client(server, client_index, notify_client);
 }
 
-cn_error_t cn_protocol_server_send_to_client(cn_protocol_server_t* server, const void* packet, int size, int client_index)
-{
+cn_error_t cn_protocol_server_send_to_client(cn_protocol_server_t* server, const void* packet, int size, int client_index) {
 	if (size < 1) return cn_error_failure("`size` is negative.");
 	if (size > CN_PROTOCOL_PACKET_PAYLOAD_MAX) return cn_error_failure("`size` exceeds `CN_PROTOCOL_PACKET_PAYLOAD_MAX`.");
 	CN_ASSERT(server->client_count >= 1 && client_index >= 0 && client_index < CN_PROTOCOL_SERVER_MAX_CLIENTS);
@@ -7478,8 +7018,7 @@ cn_error_t cn_protocol_server_send_to_client(cn_protocol_server_t* server, const
 	return cn_error_success();
 }
 
-static void s_protocol_server_look_for_timeouts(cn_protocol_server_t* server)
-{
+static void s_protocol_server_look_for_timeouts(cn_protocol_server_t* server) {
 	double* last_received_times = server->client_last_packet_received_time;
 	for (int i = 0; i < CN_PROTOCOL_SERVER_MAX_CLIENTS;) {
 		if (server->client_is_connected[i]) {
@@ -7487,7 +7026,7 @@ static void s_protocol_server_look_for_timeouts(cn_protocol_server_t* server)
 				//log(CN_LOG_LEVEL_INFORMATIONAL, "Protocol Server: Client %" PRIu64 " has timed out.", server->client_id[i]);
 				cn_protocol_server_disconnect_client(server, i, true);
 			} else {
-				 ++i;
+				++i;
 			}
 		} else {
 			++i;
@@ -7495,8 +7034,7 @@ static void s_protocol_server_look_for_timeouts(cn_protocol_server_t* server)
 	}
 }
 
-void cn_protocol_server_update(cn_protocol_server_t* server, double dt, uint64_t current_time)
-{
+void cn_protocol_server_update(cn_protocol_server_t* server, double dt, uint64_t current_time) {
 	server->current_time = current_time;
 
 	cn_simulator_update(server->sim, dt);
@@ -7505,24 +7043,20 @@ void cn_protocol_server_update(cn_protocol_server_t* server, double dt, uint64_t
 	s_protocol_server_look_for_timeouts(server);
 }
 
-int cn_protocol_server_client_count(cn_protocol_server_t* server)
-{
+int cn_protocol_server_client_count(cn_protocol_server_t* server) {
 	return server->client_count;
 }
 
-uint64_t cn_protocol_server_get_client_id(cn_protocol_server_t* server, int client_index)
-{
+uint64_t cn_protocol_server_get_client_id(cn_protocol_server_t* server, int client_index) {
 	CN_ASSERT(server->client_count >= 1 && client_index >= 0 && client_index < CN_PROTOCOL_SERVER_MAX_CLIENTS);
 	return server->client_id[client_index];
 }
 
-bool cn_protocol_server_is_client_connected(cn_protocol_server_t* server, int client_index)
-{
+bool cn_protocol_server_is_client_connected(cn_protocol_server_t* server, int client_index) {
 	return server->client_is_connected[client_index];
 }
 
-void cn_protocol_server_enable_network_simulator(cn_protocol_server_t* server, double latency, double jitter, double drop_chance, double duplicate_chance)
-{
+void cn_protocol_server_enable_network_simulator(cn_protocol_server_t* server, double latency, double jitter, double drop_chance, double duplicate_chance) {
 	cn_simulator_t* sim = cn_simulator_create(&server->socket, server->mem_ctx);
 	sim->latency = latency;
 	sim->jitter = jitter;
@@ -7534,8 +7068,7 @@ void cn_protocol_server_enable_network_simulator(cn_protocol_server_t* server, d
 //--------------------------------------------------------------------------------------------------
 // RELIABILITY TRANSPORT
 
-typedef struct cn_sequence_buffer_t
-{
+typedef struct cn_sequence_buffer_t {
 	uint16_t sequence;
 	int capacity;
 	int stride;
@@ -7550,22 +7083,20 @@ typedef struct cn_sequence_buffer_t
 #define CN_ACK_SYSTEM_HEADER_SIZE (2 + 2 + 4)
 #define CN_ACK_SYSTEM_MAX_PACKET_SIZE 1180
 
-typedef struct cn_ack_system_config_t
-{
+typedef struct cn_ack_system_config_t {
 	int max_packet_size;
 	int initial_ack_capacity;
 	int sent_packets_sequence_buffer_size;
 	int received_packets_sequence_buffer_size;
 
 	int index;
-	cn_error_t (*send_packet_fn)(int client_index, void* packet, int size, void* udata);
+	cn_error_t(*send_packet_fn)(int client_index, void* packet, int size, void* udata);
 
 	void* udata;
 	void* user_allocator_context;
 } cn_ack_system_config_t;
 
-cn_ack_system_config_t cn_ack_system_config_defaults()
-{
+cn_ack_system_config_t cn_ack_system_config_defaults() {
 	cn_ack_system_config_t config;
 	config.max_packet_size = CN_ACK_SYSTEM_MAX_PACKET_SIZE;
 	config.initial_ack_capacity = 256;
@@ -7578,8 +7109,7 @@ cn_ack_system_config_t cn_ack_system_config_defaults()
 	return config;
 }
 
-typedef enum cn_ack_system_counter_t
-{
+typedef enum cn_ack_system_counter_t {
 	CN_ACK_SYSTEM_COUNTERS_PACKETS_SENT,
 	CN_ACK_SYSTEM_COUNTERS_PACKETS_RECEIVED,
 	CN_ACK_SYSTEM_COUNTERS_PACKETS_ACKED,
@@ -7591,8 +7121,7 @@ typedef enum cn_ack_system_counter_t
 	CN_ACK_SYSTEM_COUNTERS_MAX
 } cn_ack_system_counter_t;
 
-typedef struct cn_ack_system_t
-{
+typedef struct cn_ack_system_t {
 	double time;
 	int max_packet_size;
 
@@ -7612,7 +7141,7 @@ typedef struct cn_ack_system_t
 	double incoming_bandwidth_kbps;
 
 	int index;
-	cn_error_t (*send_packet_fn)(int client_index, void* packet, int size, void* udata);
+	cn_error_t(*send_packet_fn)(int client_index, void* packet, int size, void* udata);
 
 	uint64_t counters[CN_ACK_SYSTEM_COUNTERS_MAX];
 } cn_ack_system_t;
@@ -7628,20 +7157,16 @@ typedef struct cn_ack_system_t
 
 typedef void (cn_sequence_buffer_cleanup_entry_fn)(void* data, uint16_t sequence, void* udata, void* mem_ctx);
 
-void cn_sequence_buffer_remove(cn_sequence_buffer_t* buffer, uint16_t sequence, cn_sequence_buffer_cleanup_entry_fn* cleanup_fn)
-{
+void cn_sequence_buffer_remove(cn_sequence_buffer_t* buffer, uint16_t sequence, cn_sequence_buffer_cleanup_entry_fn* cleanup_fn) {
 	int index = sequence % buffer->capacity;
-	if (buffer->entry_sequence[index] != 0xFFFFFFFF)
-	{
+	if (buffer->entry_sequence[index] != 0xFFFFFFFF) {
 		buffer->entry_sequence[index] = 0xFFFFFFFF;
 		if (cleanup_fn) cleanup_fn(buffer->entry_data + buffer->stride * index, buffer->entry_sequence[index], buffer->udata, buffer->mem_ctx);
 	}
 }
 
-void cn_sequence_buffer_reset(cn_sequence_buffer_t* buffer, cn_sequence_buffer_cleanup_entry_fn* cleanup_fn)
-{
-	for (int i = 0; i < buffer->capacity; ++i)
-	{
+void cn_sequence_buffer_reset(cn_sequence_buffer_t* buffer, cn_sequence_buffer_cleanup_entry_fn* cleanup_fn) {
+	for (int i = 0; i < buffer->capacity; ++i) {
 		cn_sequence_buffer_remove(buffer, i, cleanup_fn);
 	}
 
@@ -7649,8 +7174,7 @@ void cn_sequence_buffer_reset(cn_sequence_buffer_t* buffer, cn_sequence_buffer_c
 	CN_MEMSET(buffer->entry_sequence, ~0, sizeof(uint32_t) * buffer->capacity);
 }
 
-int cn_sequence_buffer_init(cn_sequence_buffer_t* buffer, int capacity, int stride, void* udata, void* mem_ctx)
-{
+int cn_sequence_buffer_init(cn_sequence_buffer_t* buffer, int capacity, int stride, void* udata, void* mem_ctx) {
 	CN_MEMSET(buffer, 0, sizeof(cn_sequence_buffer_t));
 	buffer->capacity = capacity;
 	buffer->stride = stride;
@@ -7663,10 +7187,8 @@ int cn_sequence_buffer_init(cn_sequence_buffer_t* buffer, int capacity, int stri
 	return 0;
 }
 
-void cn_sequence_buffer_cleanup(cn_sequence_buffer_t* buffer, cn_sequence_buffer_cleanup_entry_fn* cleanup_fn)
-{
-	for (int i = 0; i < buffer->capacity; ++i)
-	{
+void cn_sequence_buffer_cleanup(cn_sequence_buffer_t* buffer, cn_sequence_buffer_cleanup_entry_fn* cleanup_fn) {
+	for (int i = 0; i < buffer->capacity; ++i) {
 		cn_sequence_buffer_remove(buffer, i, cleanup_fn);
 	}
 
@@ -7675,12 +7197,10 @@ void cn_sequence_buffer_cleanup(cn_sequence_buffer_t* buffer, cn_sequence_buffer
 	CN_MEMSET(buffer, 0, sizeof(cn_sequence_buffer_t));
 }
 
-static void s_sequence_buffer_remove_entries(cn_sequence_buffer_t* buffer, int sequence_a, int sequence_b, cn_sequence_buffer_cleanup_entry_fn* cleanup_fn)
-{
+static void s_sequence_buffer_remove_entries(cn_sequence_buffer_t* buffer, int sequence_a, int sequence_b, cn_sequence_buffer_cleanup_entry_fn* cleanup_fn) {
 	if (sequence_b < sequence_a) sequence_b += 65536;
 	if (sequence_b - sequence_a < buffer->capacity) {
-		for (int sequence = sequence_a; sequence <= sequence_b; ++sequence)
-		{
+		for (int sequence = sequence_a; sequence <= sequence_b; ++sequence) {
 			int index = sequence % buffer->capacity;
 			if (cleanup_fn && buffer->entry_sequence[index] != 0xFFFFFFFF) {
 				cleanup_fn(buffer->entry_data + buffer->stride * index, buffer->entry_sequence[index], buffer->udata, buffer->mem_ctx);
@@ -7688,8 +7208,7 @@ static void s_sequence_buffer_remove_entries(cn_sequence_buffer_t* buffer, int s
 			buffer->entry_sequence[index] = 0xFFFFFFFF;
 		}
 	} else {
-		for (int i = 0; i < buffer->capacity; ++i)
-		{
+		for (int i = 0; i < buffer->capacity; ++i) {
 			if (cleanup_fn && buffer->entry_sequence[i] != 0xFFFFFFFF) {
 				cleanup_fn(buffer->entry_data + buffer->stride * i, buffer->entry_sequence[i], buffer->udata, buffer->mem_ctx);
 			}
@@ -7698,24 +7217,20 @@ static void s_sequence_buffer_remove_entries(cn_sequence_buffer_t* buffer, int s
 	}
 }
 
-static CN_INLINE int s_sequence_greater_than(uint16_t a, uint16_t b)
-{
+static CN_INLINE int s_sequence_greater_than(uint16_t a, uint16_t b) {
 	return ((a > b) && (a - b <= 32768)) |
-	       ((a < b) && (b - a  > 32768));
+		((a < b) && (b - a > 32768));
 }
 
-static CN_INLINE int s_sequence_less_than(uint16_t a, uint16_t b)
-{
+static CN_INLINE int s_sequence_less_than(uint16_t a, uint16_t b) {
 	return s_sequence_greater_than(b, a);
 }
 
-static CN_INLINE int s_sequence_is_stale(cn_sequence_buffer_t* buffer, uint16_t sequence)
-{
+static CN_INLINE int s_sequence_is_stale(cn_sequence_buffer_t* buffer, uint16_t sequence) {
 	return s_sequence_less_than(sequence, buffer->sequence - ((uint16_t)buffer->capacity));
 }
 
-void* cn_sequence_buffer_insert(cn_sequence_buffer_t* buffer, uint16_t sequence, cn_sequence_buffer_cleanup_entry_fn* cleanup_fn)
-{
+void* cn_sequence_buffer_insert(cn_sequence_buffer_t* buffer, uint16_t sequence, cn_sequence_buffer_cleanup_entry_fn* cleanup_fn) {
 	if (s_sequence_greater_than(sequence + 1, buffer->sequence)) {
 		s_sequence_buffer_remove_entries(buffer, buffer->sequence, sequence, cleanup_fn);
 		buffer->sequence = sequence + 1;
@@ -7730,31 +7245,26 @@ void* cn_sequence_buffer_insert(cn_sequence_buffer_t* buffer, uint16_t sequence,
 	return buffer->entry_data + index * buffer->stride;
 }
 
-int cn_sequence_buffer_is_empty(cn_sequence_buffer_t* sequence_buffer, uint16_t sequence)
-{
+int cn_sequence_buffer_is_empty(cn_sequence_buffer_t* sequence_buffer, uint16_t sequence) {
 	return sequence_buffer->entry_sequence[sequence % sequence_buffer->capacity] == 0xFFFFFFFF;
 }
 
-void* cn_sequence_buffer_find(cn_sequence_buffer_t* sequence_buffer, uint16_t sequence)
-{
+void* cn_sequence_buffer_find(cn_sequence_buffer_t* sequence_buffer, uint16_t sequence) {
 	int index = sequence % sequence_buffer->capacity;
 	return ((sequence_buffer->entry_sequence[index] == (uint32_t)sequence)) ? (sequence_buffer->entry_data + index * sequence_buffer->stride) : NULL;
 }
 
-void* cn_sequence_buffer_at_index(cn_sequence_buffer_t* sequence_buffer, int index)
-{
+void* cn_sequence_buffer_at_index(cn_sequence_buffer_t* sequence_buffer, int index) {
 	CN_ASSERT(index >= 0);
 	CN_ASSERT(index < sequence_buffer->capacity);
 	return sequence_buffer->entry_sequence[index] != 0xFFFFFFFF ? (sequence_buffer->entry_data + index * sequence_buffer->stride) : NULL;
 }
 
-void cn_sequence_buffer_generate_ack_bits(cn_sequence_buffer_t* sequence_buffer, uint16_t* ack, uint32_t* ack_bits)
-{
+void cn_sequence_buffer_generate_ack_bits(cn_sequence_buffer_t* sequence_buffer, uint16_t* ack, uint32_t* ack_bits) {
 	*ack = sequence_buffer->sequence - 1;
 	*ack_bits = 0;
 	uint32_t mask = 1;
-	for (int i = 0; i < 32; ++i)
-	{
+	for (int i = 0; i < 32; ++i) {
 		uint16_t sequence = *ack - ((uint16_t)i);
 		if (cn_sequence_buffer_find(sequence_buffer, sequence)) {
 			*ack_bits |= mask;
@@ -7767,8 +7277,7 @@ void cn_sequence_buffer_generate_ack_bits(cn_sequence_buffer_t* sequence_buffer,
 
 #define CN_PACKET_QUEUE_MAX_ENTRIES (1024)
 
-typedef struct cn_packet_queue_t
-{
+typedef struct cn_packet_queue_t {
 	int count;
 	int index0;
 	int index1;
@@ -7776,15 +7285,13 @@ typedef struct cn_packet_queue_t
 	void* packets[CN_PACKET_QUEUE_MAX_ENTRIES];
 } cn_packet_queue_t;
 
-void cn_packet_queue_init(cn_packet_queue_t* q)
-{
+void cn_packet_queue_init(cn_packet_queue_t* q) {
 	q->count = 0;
 	q->index0 = 0;
 	q->index1 = 0;
 }
 
-int cn_packet_queue_push(cn_packet_queue_t* q, void* packet, int size)
-{
+int cn_packet_queue_push(cn_packet_queue_t* q, void* packet, int size) {
 	if (q->count >= CN_PACKET_QUEUE_MAX_ENTRIES) {
 		return -1;
 	} else {
@@ -7796,8 +7303,7 @@ int cn_packet_queue_push(cn_packet_queue_t* q, void* packet, int size)
 	}
 }
 
-int cn_packet_queue_pop(cn_packet_queue_t* q, void** packet, int* size)
-{
+int cn_packet_queue_pop(cn_packet_queue_t* q, void** packet, int* size) {
 	if (q->count <= 0) {
 		return -1;
 	} else {
@@ -7811,8 +7317,7 @@ int cn_packet_queue_pop(cn_packet_queue_t* q, void** packet, int* size)
 
 // -------------------------------------------------------------------------------------------------
 
-typedef struct cn_socket_send_queue_item_t
-{
+typedef struct cn_socket_send_queue_item_t {
 	int fragment_index;
 	int fragment_count;
 	int final_fragment_size;
@@ -7821,23 +7326,20 @@ typedef struct cn_socket_send_queue_item_t
 	uint8_t* packet;
 } cn_socket_send_queue_item_t;
 
-typedef struct cn_socket_send_queue_t
-{
+typedef struct cn_socket_send_queue_t {
 	int count;
 	int index0;
 	int index1;
 	cn_socket_send_queue_item_t items[CN_TRANSPORT_SEND_QUEUE_MAX_ENTRIES];
 } cn_socket_send_queue_t;
 
-static void s_send_queue_init(cn_socket_send_queue_t* q)
-{
+static void s_send_queue_init(cn_socket_send_queue_t* q) {
 	q->count = 0;
 	q->index0 = 0;
 	q->index1 = 0;
 }
 
-static int s_send_queue_push(cn_socket_send_queue_t* q, const cn_socket_send_queue_item_t* item)
-{
+static int s_send_queue_push(cn_socket_send_queue_t* q, const cn_socket_send_queue_item_t* item) {
 	CN_ASSERT(q->count >= 0);
 	CN_ASSERT(q->index0 >= 0 && q->index0 < CN_TRANSPORT_SEND_QUEUE_MAX_ENTRIES);
 	CN_ASSERT(q->index1 >= 0 && q->index1 < CN_TRANSPORT_SEND_QUEUE_MAX_ENTRIES);
@@ -7853,8 +7355,7 @@ static int s_send_queue_push(cn_socket_send_queue_t* q, const cn_socket_send_que
 	}
 }
 
-static void s_send_queue_pop(cn_socket_send_queue_t* q)
-{
+static void s_send_queue_pop(cn_socket_send_queue_t* q) {
 	CN_ASSERT(q->count >= 0 && q->count < CN_TRANSPORT_SEND_QUEUE_MAX_ENTRIES);
 	CN_ASSERT(q->index0 >= 0 && q->index0 < CN_TRANSPORT_SEND_QUEUE_MAX_ENTRIES);
 	CN_ASSERT(q->index1 >= 0 && q->index1 < CN_TRANSPORT_SEND_QUEUE_MAX_ENTRIES);
@@ -7864,8 +7365,7 @@ static void s_send_queue_pop(cn_socket_send_queue_t* q)
 	--q->count;
 }
 
-static int s_send_queue_peek(cn_socket_send_queue_t* q, cn_socket_send_queue_item_t** item)
-{
+static int s_send_queue_peek(cn_socket_send_queue_t* q, cn_socket_send_queue_item_t** item) {
 	CN_ASSERT(q->count >= 0 && q->count < CN_TRANSPORT_SEND_QUEUE_MAX_ENTRIES);
 	CN_ASSERT(q->index0 >= 0 && q->index0 < CN_TRANSPORT_SEND_QUEUE_MAX_ENTRIES);
 	CN_ASSERT(q->index1 >= 0 && q->index1 < CN_TRANSPORT_SEND_QUEUE_MAX_ENTRIES);
@@ -7881,8 +7381,7 @@ static int s_send_queue_peek(cn_socket_send_queue_t* q, cn_socket_send_queue_ite
 
 // -------------------------------------------------------------------------------------------------
 
-typedef struct cn_fragment_t
-{
+typedef struct cn_fragment_t {
 	int index;
 	double timestamp;
 	cn_handle_t handle;
@@ -7890,8 +7389,7 @@ typedef struct cn_fragment_t
 	int size;
 } cn_fragment_t;
 
-typedef struct cn_fragment_reassembly_entry_t
-{
+typedef struct cn_fragment_reassembly_entry_t {
 	int received_final_fragment;
 	int packet_size;
 	uint8_t* packet;
@@ -7901,22 +7399,21 @@ typedef struct cn_fragment_reassembly_entry_t
 	uint8_t* fragment_received;
 } cn_fragment_reassembly_entry_t;
 
-typedef struct cn_packet_assembly_t
-{
+typedef struct cn_packet_assembly_t {
 	uint16_t reassembly_sequence;
 	cn_sequence_buffer_t fragment_reassembly;
 	cn_packet_queue_t assembled_packets;
 } cn_packet_assembly_t;
 
-static void s_fragment_reassembly_entry_cleanup(void* data, uint16_t sequence, void* udata, void* mem_ctx)
-{
+static void s_fragment_reassembly_entry_cleanup(void* data, uint16_t sequence, void* udata, void* mem_ctx) {
+	(void)udata;
+	(void)sequence;
 	cn_fragment_reassembly_entry_t* reassembly = (cn_fragment_reassembly_entry_t*)data;
 	CN_FREE(reassembly->packet, mem_ctx);
 	CN_FREE(reassembly->fragment_received, mem_ctx);
 }
 
-static int s_packet_assembly_init(cn_packet_assembly_t* assembly, int max_fragments_in_flight, void* mem_ctx)
-{
+static int s_packet_assembly_init(cn_packet_assembly_t* assembly, int max_fragments_in_flight, void* mem_ctx) {
 	int ret = 0;
 	int reassembly_init = 0;
 
@@ -7933,15 +7430,13 @@ static int s_packet_assembly_init(cn_packet_assembly_t* assembly, int max_fragme
 	return ret;
 }
 
-static void s_packet_assembly_cleanup(cn_packet_assembly_t* assembly)
-{
+static void s_packet_assembly_cleanup(cn_packet_assembly_t* assembly) {
 	cn_sequence_buffer_cleanup(&assembly->fragment_reassembly, s_fragment_reassembly_entry_cleanup);
 }
 
 // -------------------------------------------------------------------------------------------------
 
-typedef struct cn_transport_t
-{
+typedef struct cn_transport_t {
 	int fragment_size;
 	int max_packet_size;
 	int max_fragments_in_flight;
@@ -7967,27 +7462,26 @@ typedef struct cn_transport_t
 
 // -------------------------------------------------------------------------------------------------
 
-typedef struct cn_sent_packet_t
-{
+typedef struct cn_sent_packet_t {
 	double timestamp;
 	int acked;
 	int size;
 } cn_sent_packet_t;
 
-static void s_sent_packet_cleanup(void* data, uint16_t sequence, void* udata, void* mem_ctx)
-{
+static void s_sent_packet_cleanup(void* data, uint16_t sequence, void* udata, void* mem_ctx) {
+	(void)sequence;
+	(void)udata;
+	(void)mem_ctx;
 	cn_sent_packet_t* packet = (cn_sent_packet_t*)data;
 	packet->acked = 0;
 }
 
-typedef struct cn_received_packet_t
-{
+typedef struct cn_received_packet_t {
 	double timestamp;
 	int size;
 } cn_received_packet_t;
 
-cn_ack_system_t* cn_ack_system_create(cn_ack_system_config_t config)
-{
+cn_ack_system_t* cn_ack_system_create(cn_ack_system_config_t config) {
 	int ret = 0;
 	int sent_packets_init = 0;
 	int received_packets_init = 0;
@@ -8024,8 +7518,7 @@ cn_ack_system_t* cn_ack_system_create(cn_ack_system_config_t config)
 	}
 
 	if (ret) {
-		if (ack_system)
-		{
+		if (ack_system) {
 			if (sent_packets_init) cn_sequence_buffer_cleanup(&ack_system->sent_packets, NULL);
 			if (received_packets_init) cn_sequence_buffer_cleanup(&ack_system->received_packets, NULL);
 		}
@@ -8036,8 +7529,7 @@ cn_ack_system_t* cn_ack_system_create(cn_ack_system_config_t config)
 	return ret ? NULL : ack_system;
 }
 
-void cn_ack_system_destroy(cn_ack_system_t* ack_system)
-{
+void cn_ack_system_destroy(cn_ack_system_t* ack_system) {
 	if (!ack_system) return;
 	void* mem_ctx = ack_system->mem_ctx;
 	cn_sequence_buffer_cleanup(&ack_system->sent_packets, NULL);
@@ -8046,8 +7538,7 @@ void cn_ack_system_destroy(cn_ack_system_t* ack_system)
 	CN_FREE(ack_system, mem_ctx);
 }
 
-void cn_ack_system_reset(cn_ack_system_t* ack_system)
-{
+void cn_ack_system_reset(cn_ack_system_t* ack_system) {
 	ack_system->sequence = 0;
 	ack_system->acks_count = 0;
 	cn_sequence_buffer_reset(&ack_system->sent_packets, NULL);
@@ -8063,8 +7554,7 @@ void cn_ack_system_reset(cn_ack_system_t* ack_system)
 	}
 }
 
-static int s_write_ack_system_header(uint8_t* buffer, uint16_t sequence, uint16_t ack, uint32_t ack_bits)
-{
+static int s_write_ack_system_header(uint8_t* buffer, uint16_t sequence, uint16_t ack, uint32_t ack_bits) {
 	uint8_t* buffer_start = buffer;
 	cn_write_uint16(&buffer, sequence);
 	cn_write_uint16(&buffer, ack);
@@ -8072,8 +7562,7 @@ static int s_write_ack_system_header(uint8_t* buffer, uint16_t sequence, uint16_
 	return (int)(buffer - buffer_start);
 }
 
-cn_error_t cn_ack_system_send_packet(cn_ack_system_t* ack_system, void* data, int size, uint16_t* sequence_out)
-{
+cn_error_t cn_ack_system_send_packet(cn_ack_system_t* ack_system, void* data, int size, uint16_t* sequence_out) {
 	if (size > ack_system->max_packet_size || size > CN_ACK_SYSTEM_MAX_PACKET_SIZE) {
 		ack_system->counters[CN_ACK_SYSTEM_COUNTERS_PACKETS_TOO_LARGE_TO_SEND]++;
 		return cn_error_failure("Exceeded max packet size in ack system.");
@@ -8108,13 +7597,11 @@ cn_error_t cn_ack_system_send_packet(cn_ack_system_t* ack_system, void* data, in
 	return cn_error_success();
 }
 
-uint16_t cn_ack_system_get_sequence(cn_ack_system_t* ack_system)
-{
+uint16_t cn_ack_system_get_sequence(cn_ack_system_t* ack_system) {
 	return ack_system->sequence;
 }
 
-static int s_read_ack_system_header(uint8_t* buffer, int size, uint16_t* sequence, uint16_t* ack, uint32_t* ack_bits)
-{
+static int s_read_ack_system_header(uint8_t* buffer, int size, uint16_t* sequence, uint16_t* ack, uint32_t* ack_bits) {
 	if (size < CN_ACK_SYSTEM_HEADER_SIZE) return -1;
 	uint8_t* buffer_start = buffer;
 	*sequence = cn_read_uint16(&buffer);
@@ -8123,8 +7610,7 @@ static int s_read_ack_system_header(uint8_t* buffer, int size, uint16_t* sequenc
 	return (int)(buffer - buffer_start);
 }
 
-cn_error_t cn_ack_system_receive_packet(cn_ack_system_t* ack_system, void* data, int size)
-{
+cn_error_t cn_ack_system_receive_packet(cn_ack_system_t* ack_system, void* data, int size) {
 	if (size > ack_system->max_packet_size || size > CN_ACK_SYSTEM_MAX_PACKET_SIZE) {
 		ack_system->counters[CN_ACK_SYSTEM_COUNTERS_PACKETS_TOO_LARGE_TO_RECEIVE]++;
 		return cn_error_failure("Exceeded max packet size in ack system.");
@@ -8154,8 +7640,7 @@ cn_error_t cn_ack_system_receive_packet(cn_ack_system_t* ack_system, void* data,
 	packet->timestamp = ack_system->time;
 	packet->size = size;
 
-	for (int i = 0; i < 32; ++i)
-	{
+	for (int i = 0; i < 32; ++i) {
 		int bit_was_set = ack_bits & 1;
 		ack_bits >>= 1;
 
@@ -8179,28 +7664,23 @@ cn_error_t cn_ack_system_receive_packet(cn_ack_system_t* ack_system, void* data,
 	return cn_error_success();
 }
 
-uint16_t* cn_ack_system_get_acks(cn_ack_system_t* ack_system)
-{
+uint16_t* cn_ack_system_get_acks(cn_ack_system_t* ack_system) {
 	return ack_system->acks;
 }
 
-int cn_ack_system_get_acks_count(cn_ack_system_t* ack_system)
-{
+int cn_ack_system_get_acks_count(cn_ack_system_t* ack_system) {
 	return ack_system->acks_count;
 }
 
-void cn_ack_system_clear_acks(cn_ack_system_t* ack_system)
-{
+void cn_ack_system_clear_acks(cn_ack_system_t* ack_system) {
 	ack_system->acks_count = 0;
 }
 
-static CN_INLINE double s_calc_packet_loss(double packet_loss, cn_sequence_buffer_t* sent_packets)
-{
+static CN_INLINE double s_calc_packet_loss(double packet_loss, cn_sequence_buffer_t* sent_packets) {
 	int packet_count = 0;
 	int packet_drop_count = 0;
 
-	for (int i = 0; i < sent_packets->capacity; ++i)
-	{
+	for (int i = 0; i < sent_packets->capacity; ++i) {
 		cn_sent_packet_t* packet = (cn_sent_packet_t*)cn_sequence_buffer_at_index(sent_packets, i);
 		if (packet) {
 			packet_count++;
@@ -8216,14 +7696,12 @@ static CN_INLINE double s_calc_packet_loss(double packet_loss, cn_sequence_buffe
 
 #include <float.h>
 
-static CN_INLINE double s_calc_bandwidth(double bandwidth, cn_sequence_buffer_t* sent_packets)
-{
+static CN_INLINE double s_calc_bandwidth(double bandwidth, cn_sequence_buffer_t* sent_packets) {
 	int bytes_sent = 0;
 	double start_timestamp = DBL_MAX;
 	double end_timestamp = 0;
 
-	for (int i = 0; i < sent_packets->capacity; ++i)
-	{
+	for (int i = 0; i < sent_packets->capacity; ++i) {
 		cn_sent_packet_t* packet = (cn_sent_packet_t*)cn_sequence_buffer_at_index(sent_packets, i);
 		if (packet) {
 			bytes_sent += packet->size;
@@ -8241,48 +7719,40 @@ static CN_INLINE double s_calc_bandwidth(double bandwidth, cn_sequence_buffer_t*
 	return bandwidth;
 }
 
-void cn_ack_system_update(cn_ack_system_t* ack_system, double dt)
-{
+void cn_ack_system_update(cn_ack_system_t* ack_system, double dt) {
 	ack_system->time += dt;
 	ack_system->packet_loss = s_calc_packet_loss(ack_system->packet_loss, &ack_system->sent_packets);
 	ack_system->incoming_bandwidth_kbps = s_calc_bandwidth(ack_system->incoming_bandwidth_kbps, &ack_system->sent_packets);
 	ack_system->outgoing_bandwidth_kbps = s_calc_bandwidth(ack_system->outgoing_bandwidth_kbps, &ack_system->received_packets);
 }
 
-double cn_ack_system_rtt(cn_ack_system_t* ack_system)
-{
+double cn_ack_system_rtt(cn_ack_system_t* ack_system) {
 	return ack_system->rtt;
 }
 
-double cn_ack_system_packet_loss(cn_ack_system_t* ack_system)
-{
+double cn_ack_system_packet_loss(cn_ack_system_t* ack_system) {
 	return ack_system->packet_loss;
 }
 
-double cn_ack_system_bandwidth_outgoing_kbps(cn_ack_system_t* ack_system)
-{
+double cn_ack_system_bandwidth_outgoing_kbps(cn_ack_system_t* ack_system) {
 	return ack_system->outgoing_bandwidth_kbps;
 }
 
-double cn_ack_system_bandwidth_incoming_kbps(cn_ack_system_t* ack_system)
-{
+double cn_ack_system_bandwidth_incoming_kbps(cn_ack_system_t* ack_system) {
 	return ack_system->incoming_bandwidth_kbps;
 }
 
-uint64_t cn_ack_system_get_counter(cn_ack_system_t* ack_system, cn_ack_system_counter_t counter)
-{
+uint64_t cn_ack_system_get_counter(cn_ack_system_t* ack_system, cn_ack_system_counter_t counter) {
 	return ack_system->counters[counter];
 }
 
 // -------------------------------------------------------------------------------------------------
 
-typedef struct cn_fragment_entry_t
-{
+typedef struct cn_fragment_entry_t {
 	cn_handle_t fragment_handle;
 } cn_fragment_entry_t;
 
-typedef struct cn_transport_config_t
-{
+typedef struct cn_transport_config_t {
 	void* mem_ctx;
 	int fragment_size;
 	int max_packet_size;
@@ -8293,11 +7763,10 @@ typedef struct cn_transport_config_t
 	void* udata;
 
 	int index;
-	cn_error_t (*send_packet_fn)(int client_index, void* packet, int size, void* udata);
+	cn_error_t(*send_packet_fn)(int client_index, void* packet, int size, void* udata);
 } cn_transport_config_t;
 
-CN_INLINE cn_transport_config_t cn_transport_config_defaults()
-{
+CN_INLINE cn_transport_config_t cn_transport_config_defaults() {
 	cn_transport_config_t config;
 	config.mem_ctx = 0;
 	config.fragment_size = CN_TRANSPORT_MAX_FRAGMENT_SIZE;
@@ -8311,8 +7780,7 @@ CN_INLINE cn_transport_config_t cn_transport_config_defaults()
 	return config;
 }
 
-cn_transport_t* cn_transport_create(cn_transport_config_t config)
-{
+cn_transport_t* cn_transport_create(cn_transport_config_t config) {
 	if (!config.send_packet_fn) return NULL;
 
 	int ret = 0;
@@ -8321,7 +7789,7 @@ cn_transport_t* cn_transport_create(cn_transport_config_t config)
 	int assembly_reliable_init = 0;
 	int assembly_unreliable_init = 0;
 
-	cn_transport_t* transport = (cn_transport_t*)CN_ALLOC(sizeof(cn_transport_t), config->user_allocator_context);
+	cn_transport_t* transport = (cn_transport_t*)CN_ALLOC(sizeof(cn_transport_t), config.user_allocator_context);
 	if (!transport) return NULL;
 	transport->fragment_size = config.fragment_size;
 	transport->max_packet_size = config.max_packet_size;
@@ -8357,25 +7825,22 @@ cn_transport_t* cn_transport_create(cn_transport_config_t config)
 		if (sequence_sent_fragments_init) cn_sequence_buffer_cleanup(&transport->sent_fragments, NULL);
 		if (assembly_reliable_init) s_packet_assembly_cleanup(&transport->reliable_and_in_order_assembly);
 		if (assembly_unreliable_init) s_packet_assembly_cleanup(&transport->fire_and_forget_assembly);
-		CN_FREE(transport, config->user_allocator_context);
+		CN_FREE(transport, config.user_allocator_context);
 	}
 
 	return ret ? NULL : transport;
 }
 
-static void s_transport_cleanup_packet_queue(cn_transport_t* transport, cn_packet_queue_t* q)
-{
+static void s_transport_cleanup_packet_queue(cn_transport_t* transport, cn_packet_queue_t* q) {
 	int index = q->index0;
-	while (q->count--)
-	{
+	while (q->count--) {
 		int next_index = index + 1 % CN_PACKET_QUEUE_MAX_ENTRIES;
 		CN_FREE(q->packets[index], transport->mem_ctx);
 		index = next_index;
 	}
 }
 
-void cn_transport_destroy(cn_transport_t* transport)
-{
+void cn_transport_destroy(cn_transport_t* transport) {
 	if (!transport) return;
 	void* mem_ctx = transport->mem_ctx;
 
@@ -8386,8 +7851,7 @@ void cn_transport_destroy(cn_transport_t* transport)
 	cn_handle_allocator_destroy(transport->fragment_handle_table);
 	s_packet_assembly_cleanup(&transport->reliable_and_in_order_assembly);
 	s_packet_assembly_cleanup(&transport->fire_and_forget_assembly);
-	for (int i = 0; i < transport->fragments_count; ++i)
-	{
+	for (int i = 0; i < transport->fragments_count; ++i) {
 		cn_fragment_t* fragment = transport->fragments + i;
 		CN_FREE(fragment->data, mem_ctx);
 	}
@@ -8396,8 +7860,7 @@ void cn_transport_destroy(cn_transport_t* transport)
 	CN_FREE(transport, mem_ctx);
 }
 
-static CN_INLINE int s_transport_write_header(uint8_t* buffer, int size, uint8_t prefix, uint16_t sequence, uint16_t fragment_count, uint16_t fragment_index, uint16_t fragment_size)
-{
+static CN_INLINE int s_transport_write_header(uint8_t* buffer, int size, uint8_t prefix, uint16_t sequence, uint16_t fragment_count, uint16_t fragment_index, uint16_t fragment_size) {
 	if (size < CN_TRANSPORT_HEADER_SIZE) return -1;
 	uint8_t* buffer_start = buffer;
 	cn_write_uint8(&buffer, prefix);
@@ -8408,8 +7871,7 @@ static CN_INLINE int s_transport_write_header(uint8_t* buffer, int size, uint8_t
 	return (int)(buffer - buffer_start);
 }
 
-static cn_error_t s_transport_send_fragments(cn_transport_t* transport)
-{
+static cn_error_t s_transport_send_fragments(cn_transport_t* transport) {
 	CN_ASSERT(transport->fragments_count <= transport->max_fragments_in_flight);
 	if (transport->fragments_count == transport->max_fragments_in_flight) {
 		return cn_error_failure("Too many fragments already in flight.");
@@ -8420,8 +7882,7 @@ static cn_error_t s_transport_send_fragments(cn_transport_t* transport)
 	int fragments_space_available_send = transport->max_fragments_in_flight - transport->fragments_count;
 	int fragment_size = transport->fragment_size;
 
-	while (fragments_space_available_send)
-	{
+	while (fragments_space_available_send) {
 		cn_socket_send_queue_item_t* item;
 		if (s_send_queue_peek(&transport->send_queue, &item) < 0) {
 			break;
@@ -8433,8 +7894,7 @@ static cn_error_t s_transport_send_fragments(cn_transport_t* transport)
 		//if (item->fragment_index + fragment_count_to_send > item->fragment_count) __debugbreak();
 		CN_ASSERT(item->fragment_index + fragment_count_to_send <= item->fragment_count);
 
-		for (int i = 0; i < fragment_count_to_send; ++i)
-		{
+		for (int i = 0; i < fragment_count_to_send; ++i) {
 			// Allocate fragment.
 			uint16_t fragment_header_index = (uint16_t)(item->fragment_index + i);
 			int this_fragment_size = fragment_header_index != item->fragment_count - 1 ? fragment_size : item->final_fragment_size;
@@ -8493,8 +7953,7 @@ static cn_error_t s_transport_send_fragments(cn_transport_t* transport)
 	return cn_error_success();
 }
 
-cn_error_t s_transport_send_reliably(cn_transport_t* transport, const void* data, int size)
-{
+cn_error_t s_transport_send_reliably(cn_transport_t* transport, const void* data, int size) {
 	if (size < 1) return cn_error_failure("Negative `size` not allowed.");
 	if (size > transport->max_size_single_send) return cn_error_failure("`size` exceeded `max_size_single_send` from `transport->config`.");
 
@@ -8521,8 +7980,7 @@ cn_error_t s_transport_send_reliably(cn_transport_t* transport, const void* data
 	return cn_error_success();
 }
 
-cn_error_t s_transport_send(cn_transport_t* transport, const void* data, int size)
-{
+cn_error_t s_transport_send(cn_transport_t* transport, const void* data, int size) {
 	if (size < 1) return cn_error_failure("Negative `size` is not valid.");
 	if (size > transport->max_size_single_send) return cn_error_failure("`size` exceeded `max_size_single_send` config param.");
 
@@ -8531,13 +7989,11 @@ cn_error_t s_transport_send(cn_transport_t* transport, const void* data, int siz
 	int final_fragment_size = size - (fragment_count * fragment_size);
 	if (final_fragment_size > 0) fragment_count++;
 
-	double timestamp = transport->ack_system->time;
 	uint16_t reassembly_sequence = transport->fire_and_forget_assembly.reassembly_sequence++;
 	uint8_t* buffer = transport->fire_and_forget_buffer;
 
 	uint8_t* data_ptr = (uint8_t*)data;
-	for (int i = 0; i < fragment_count; ++i)
-	{
+	for (int i = 0; i < fragment_count; ++i) {
 		int this_fragment_size = i != fragment_count - 1 ? fragment_size : final_fragment_size;
 		uint8_t* fragment_src = data_ptr + fragment_size * i;
 		CN_ASSERT(this_fragment_size <= CN_ACK_SYSTEM_MAX_PACKET_SIZE);
@@ -8560,8 +8016,7 @@ cn_error_t s_transport_send(cn_transport_t* transport, const void* data, int siz
 	return cn_error_success();
 }
 
-cn_error_t cn_transport_send(cn_transport_t* transport, const void* data, int size, bool send_reliably)
-{
+cn_error_t cn_transport_send(cn_transport_t* transport, const void* data, int size, bool send_reliably) {
 	if (send_reliably) {
 		return s_transport_send_reliably(transport, data, size);
 	} else {
@@ -8569,8 +8024,7 @@ cn_error_t cn_transport_send(cn_transport_t* transport, const void* data, int si
 	}
 }
 
-cn_error_t cn_transport_receive_reliably_and_in_order(cn_transport_t* transport, void** data, int* size)
-{
+cn_error_t cn_transport_receive_reliably_and_in_order(cn_transport_t* transport, void** data, int* size) {
 	cn_packet_assembly_t* assembly = &transport->reliable_and_in_order_assembly;
 	if (cn_packet_queue_pop(&assembly->assembled_packets, data, size) < 0) {
 		*data = NULL;
@@ -8581,8 +8035,7 @@ cn_error_t cn_transport_receive_reliably_and_in_order(cn_transport_t* transport,
 	}
 }
 
-cn_error_t cn_transport_receive_fire_and_forget(cn_transport_t* transport, void** data, int* size)
-{
+cn_error_t cn_transport_receive_fire_and_forget(cn_transport_t* transport, void** data, int* size) {
 	cn_packet_assembly_t* assembly = &transport->fire_and_forget_assembly;
 	if (cn_packet_queue_pop(&assembly->assembled_packets, data, size) < 0) {
 		*data = NULL;
@@ -8593,13 +8046,11 @@ cn_error_t cn_transport_receive_fire_and_forget(cn_transport_t* transport, void*
 	}
 }
 
-void cn_transport_free_packet(cn_transport_t* transport, void* data)
-{
+void cn_transport_free_packet(cn_transport_t* transport, void* data) {
 	CN_FREE(data, transport->mem_ctx);
 }
 
-cn_error_t cn_transport_process_packet(cn_transport_t* transport, void* data, int size)
-{
+cn_error_t cn_transport_process_packet(cn_transport_t* transport, void* data, int size) {
 	if (size < CN_TRANSPORT_HEADER_SIZE) return cn_error_failure("`size` is too small to fit `CN_TRANSPORT_HEADER_SIZE`.");
 	cn_error_t err = cn_ack_system_receive_packet(transport->ack_system, data, size);
 	if (cn_is_error(err)) return err;
@@ -8679,7 +8130,6 @@ cn_error_t cn_transport_process_packet(cn_transport_t* transport, void* data, in
 
 	// Store completed packet for retrieval by user.
 	if (reassembly->fragment_count_so_far == fragment_count) {
-		uint16_t assembled_sequence = reassembly_sequence;
 		if (cn_packet_queue_push(&assembly->assembled_packets, reassembly->packet, reassembly->packet_size) < 0) {
 			//TODO: Log. Dropped packet since reassembly buffer was too small.
 			CN_FREE(reassembly->packet, transport->mem_ctx);
@@ -8692,13 +8142,11 @@ cn_error_t cn_transport_process_packet(cn_transport_t* transport, void* data, in
 	return cn_error_success();
 }
 
-void cn_transport_process_acks(cn_transport_t* transport)
-{
+void cn_transport_process_acks(cn_transport_t* transport) {
 	uint16_t* acks = cn_ack_system_get_acks(transport->ack_system);
 	int acks_count = cn_ack_system_get_acks_count(transport->ack_system);
 
-	for (int i = 0; i < acks_count; ++i)
-	{
+	for (int i = 0; i < acks_count; ++i) {
 		uint16_t sequence = acks[i];
 		cn_fragment_entry_t* fragment_entry = (cn_fragment_entry_t*)cn_sequence_buffer_find(&transport->sent_fragments, sequence);
 		if (fragment_entry) {
@@ -8722,15 +8170,13 @@ void cn_transport_process_acks(cn_transport_t* transport)
 	cn_ack_system_clear_acks(transport->ack_system);
 }
 
-void cn_transport_resend_unacked_fragments(cn_transport_t* transport)
-{
+void cn_transport_resend_unacked_fragments(cn_transport_t* transport) {
 	// Resend unacked fragments which were previously sent.
 	double timestamp = transport->ack_system->time;
 	int count = transport->fragments_count;
 	cn_fragment_t* fragments = transport->fragments;
 
-	for (int i = 0; i < count;)
-	{
+	for (int i = 0; i < count;) {
 		cn_fragment_t* fragment = fragments + i;
 		if (fragment->timestamp + 0.01f >= timestamp) {
 			++i;
@@ -8748,7 +8194,7 @@ void cn_transport_resend_unacked_fragments(cn_transport_t* transport)
 			--count;
 			continue;
 		} else {
-			 ++i;
+			++i;
 		}
 
 		fragment->timestamp = timestamp;
@@ -8761,13 +8207,11 @@ void cn_transport_resend_unacked_fragments(cn_transport_t* transport)
 	s_transport_send_fragments(transport);
 }
 
-int cn_transport_unacked_fragment_count(cn_transport_t* transport)
-{
+int cn_transport_unacked_fragment_count(cn_transport_t* transport) {
 	return transport->fragments_count;
 }
 
-void cn_transport_update(cn_transport_t* transport, double dt)
-{
+void cn_transport_update(cn_transport_t* transport, double dt) {
 	cn_ack_system_update(transport->ack_system, dt);
 	cn_transport_process_acks(transport);
 	cn_transport_resend_unacked_fragments(transport);
@@ -8776,21 +8220,21 @@ void cn_transport_update(cn_transport_t* transport, double dt)
 //--------------------------------------------------------------------------------------------------
 // CLIENT
 
-typedef struct cn_client_t
-{
+static bool s_cn_is_init = false;
+
+struct cn_client_t {
 	cn_protocol_client_t* p_client;
 	cn_transport_t* transport;
 	void* mem_ctx;
-} cn_client_t;
+};
 
-static cn_error_t s_send(int client_index, void* packet, int size, void* udata)
-{
+static cn_error_t s_send(int client_index, void* packet, int size, void* udata) {
+	(void)client_index;
 	cn_client_t* client = (cn_client_t*)udata;
 	return cn_protocol_client_send(client->p_client, packet, size);
 }
 
-cn_client_t* cn_client_create(uint16_t port, uint64_t application_id, bool use_ipv6, void* user_allocator_context)
-{
+cn_client_t* cn_client_create(uint16_t port, uint64_t application_id, bool use_ipv6, void* user_allocator_context) {
 	if (!s_cn_is_init) {
 		if (cn_is_error(cn_init())) {
 			return NULL;
@@ -8816,8 +8260,7 @@ cn_client_t* cn_client_create(uint16_t port, uint64_t application_id, bool use_i
 	return client;
 }
 
-void cn_client_destroy(cn_client_t* client)
-{
+void cn_client_destroy(cn_client_t* client) {
 	if (!client) return;
 	cn_protocol_client_destroy(client->p_client);
 	cn_transport_destroy(client->transport);
@@ -8825,18 +8268,15 @@ void cn_client_destroy(cn_client_t* client)
 	CN_FREE(client, mem_ctx);
 }
 
-cn_error_t cn_client_connect(cn_client_t* client, const uint8_t* connect_token)
-{
+cn_error_t cn_client_connect(cn_client_t* client, const uint8_t* connect_token) {
 	return cn_protocol_client_connect(client->p_client, connect_token);
 }
 
-void cn_client_disconnect(cn_client_t* client)
-{
+void cn_client_disconnect(cn_client_t* client) {
 	cn_protocol_client_disconnect(client->p_client);
 }
 
-void cn_client_update(cn_client_t* client, double dt, uint64_t current_time)
-{
+void cn_client_update(cn_client_t* client, double dt, uint64_t current_time) {
 	cn_protocol_client_update(client->p_client, dt, current_time);
 
 	if (cn_protocol_client_get_state(client->p_client) == CN_PROTOCOL_CLIENT_STATE_CONNECTED) {
@@ -8852,8 +8292,7 @@ void cn_client_update(cn_client_t* client, double dt, uint64_t current_time)
 	}
 }
 
-bool cn_client_pop_packet(cn_client_t* client, void** packet, int* size, bool* was_sent_reliably)
-{
+bool cn_client_pop_packet(cn_client_t* client, void** packet, int* size, bool* was_sent_reliably) {
 	if (cn_protocol_client_get_state(client->p_client) != CN_PROTOCOL_CLIENT_STATE_CONNECTED) {
 		return false;
 	}
@@ -8867,13 +8306,11 @@ bool cn_client_pop_packet(cn_client_t* client, void** packet, int* size, bool* w
 	return got;
 }
 
-void cn_client_free_packet(cn_client_t* client, void* packet)
-{
+void cn_client_free_packet(cn_client_t* client, void* packet) {
 	cn_transport_free_packet(client->transport, packet);
 }
 
-cn_error_t cn_client_send(cn_client_t* client, const void* packet, int size, bool send_reliably)
-{
+cn_error_t cn_client_send(cn_client_t* client, const void* packet, int size, bool send_reliably) {
 	if (cn_protocol_client_get_state(client->p_client) != CN_PROTOCOL_CLIENT_STATE_CONNECTED) {
 		return cn_error_failure("Client is not connected.");
 	}
@@ -8881,13 +8318,11 @@ cn_error_t cn_client_send(cn_client_t* client, const void* packet, int size, boo
 	return cn_transport_send(client->transport, packet, size, send_reliably);
 }
 
-cn_client_state_t cn_client_state_get(const cn_client_t* client)
-{
+cn_client_state_t cn_client_state_get(const cn_client_t* client) {
 	return (cn_client_state_t)cn_protocol_client_get_state(client->p_client);
 }
 
-const char* cn_client_state_string(cn_client_state_t state)
-{
+const char* cn_client_state_string(cn_client_state_t state) {
 	switch (state) {
 	case CN_CLIENT_STATE_CONNECT_TOKEN_EXPIRED: return "CN_CLIENT_STATE_CONNECT_TOKEN_EXPIRED";
 	case CN_CLIENT_STATE_INVALID_CONNECT_TOKEN: return "CN_CLIENT_STATE_INVALID_CONNECT_TOKEN";
@@ -8904,21 +8339,18 @@ const char* cn_client_state_string(cn_client_state_t state)
 	return NULL;
 }
 
-float cn_client_time_of_last_packet_recieved(const cn_client_t* client)
-{
+float cn_client_time_of_last_packet_recieved(const cn_client_t* client) {
 	return 0;
 }
 
-void cn_client_enable_network_simulator(cn_client_t* client, double latency, double jitter, double drop_chance, double duplicate_chance)
-{
+void cn_client_enable_network_simulator(cn_client_t* client, double latency, double jitter, double drop_chance, double duplicate_chance) {
 	cn_protocol_client_enable_network_simulator(client->p_client, latency, jitter, drop_chance, duplicate_chance);
 }
 
 //--------------------------------------------------------------------------------------------------
 // SERVER
 
-typedef struct cn_server_t
-{
+struct cn_server_t {
 	bool running;
 	cn_endpoint_t endpoint;
 	cn_crypto_sign_public_t public_key;
@@ -8930,16 +8362,14 @@ typedef struct cn_server_t
 	cn_transport_t* client_transports[CN_SERVER_MAX_CLIENTS];
 	cn_protocol_server_t* p_server;
 	void* mem_ctx;
-} cn_server_t;
+};
 
-static cn_error_t s_send_packet_fn(int client_index, void* packet, int size, void* udata)
-{
+static cn_error_t s_send_packet_fn(int client_index, void* packet, int size, void* udata) {
 	cn_server_t* server = (cn_server_t*)udata;
 	return cn_protocol_server_send_to_client(server->p_server, packet, size, client_index);
 }
 
-cn_server_t* cn_server_create(cn_server_config_t config)
-{
+cn_server_t* cn_server_create(cn_server_config_t config) {
 	if (!s_cn_is_init) {
 		if (cn_is_error(cn_init())) {
 			return NULL;
@@ -8958,8 +8388,7 @@ cn_server_t* cn_server_create(cn_server_config_t config)
 	return server;
 }
 
-void cn_server_destroy(cn_server_t* server)
-{
+void cn_server_destroy(cn_server_t* server) {
 	if (!server) return;
 	cn_server_stop(server);
 	cn_protocol_server_destroy(server->p_server);
@@ -8968,8 +8397,7 @@ void cn_server_destroy(cn_server_t* server)
 	CN_FREE(server, mem_ctx);
 }
 
-cn_error_t cn_server_start(cn_server_t* server, const char* address_and_port)
-{
+cn_error_t cn_server_start(cn_server_t* server, const char* address_and_port) {
 	cn_error_t err = cn_protocol_server_start(server->p_server, address_and_port, (uint32_t)server->config.connection_timeout);
 	if (cn_is_error(err)) return err;
 
@@ -8985,8 +8413,7 @@ cn_error_t cn_server_start(cn_server_t* server, const char* address_and_port)
 	return cn_error_success();
 }
 
-void cn_server_stop(cn_server_t* server)
-{
+void cn_server_stop(cn_server_t* server) {
 	if (!server) return;
 	cn_circular_buffer_reset(&server->event_queue);
 	cn_protocol_server_stop(server->p_server);
@@ -8996,13 +8423,11 @@ void cn_server_stop(cn_server_t* server)
 	}
 }
 
-static CN_INLINE int s_server_event_pull(cn_server_t* server, cn_server_event_t* event)
-{
+static CN_INLINE int s_server_event_pull(cn_server_t* server, cn_server_event_t* event) {
 	return cn_circular_buffer_pull(&server->event_queue, event, sizeof(cn_server_event_t));
 }
 
-static CN_INLINE int s_server_event_push(cn_server_t* server, cn_server_event_t* event)
-{
+static CN_INLINE int s_server_event_push(cn_server_t* server, cn_server_event_t* event) {
 	if (cn_circular_buffer_push(&server->event_queue, event, sizeof(cn_server_event_t)) < 0) {
 		if (cn_circular_buffer_grow(&server->event_queue, server->event_queue.capacity * 2) < 0) {
 			return -1;
@@ -9013,8 +8438,7 @@ static CN_INLINE int s_server_event_push(cn_server_t* server, cn_server_event_t*
 	}
 }
 
-void cn_server_update(cn_server_t* server, double dt, uint64_t current_time)
-{
+void cn_server_update(cn_server_t* server, double dt, uint64_t current_time) {
 	// Update the protocol server.
 	cn_protocol_server_update(server->p_server, dt, current_time);
 
@@ -9093,39 +8517,33 @@ void cn_server_update(cn_server_t* server, double dt, uint64_t current_time)
 	}
 }
 
-bool cn_server_pop_event(cn_server_t* server, cn_server_event_t* event)
-{
+bool cn_server_pop_event(cn_server_t* server, cn_server_event_t* event) {
 	return s_server_event_pull(server, event) ? false : true;
 }
 
-void cn_server_free_packet(cn_server_t* server, int client_index, void* data)
-{
+void cn_server_free_packet(cn_server_t* server, int client_index, void* data) {
 	CN_ASSERT(client_index >= 0 && client_index < CN_SERVER_MAX_CLIENTS);
 	CN_ASSERT(cn_protocol_server_is_client_connected(server->p_server, client_index));
 	cn_transport_free_packet(server->client_transports[client_index], data);
 }
 
-void cn_server_disconnect_client(cn_server_t* server, int client_index, bool notify_client)
-{
+void cn_server_disconnect_client(cn_server_t* server, int client_index, bool notify_client) {
 	CN_ASSERT(client_index >= 0 && client_index < CN_SERVER_MAX_CLIENTS);
 	CN_ASSERT(cn_protocol_server_is_client_connected(server->p_server, client_index));
 	cn_protocol_server_disconnect_client(server->p_server, client_index, notify_client);
 }
 
-void cn_server_send(cn_server_t* server, const void* packet, int size, int client_index, bool send_reliably)
-{
+void cn_server_send(cn_server_t* server, const void* packet, int size, int client_index, bool send_reliably) {
 	CN_ASSERT(client_index >= 0 && client_index < CN_SERVER_MAX_CLIENTS);
 	CN_ASSERT(cn_protocol_server_is_client_connected(server->p_server, client_index));
 	cn_transport_send(server->client_transports[client_index], packet, size, send_reliably);
 }
 
-bool cn_server_is_client_connected(cn_server_t* server, int client_index)
-{
+bool cn_server_is_client_connected(cn_server_t* server, int client_index) {
 	return cn_protocol_server_is_client_connected(server->p_server, client_index);
 }
 
-void cn_server_send_to_all_clients(cn_server_t* server, const void* packet, int size, bool send_reliably)
-{
+void cn_server_send_to_all_clients(cn_server_t* server, const void* packet, int size, bool send_reliably) {
 	for (int i = 0; i < CN_SERVER_MAX_CLIENTS; ++i) {
 		if (cn_server_is_client_connected(server, i)) {
 			cn_server_send(server, packet, size, i, send_reliably);
@@ -9133,8 +8551,7 @@ void cn_server_send_to_all_clients(cn_server_t* server, const void* packet, int 
 	}
 }
 
-void cn_server_send_to_all_but_one_client(cn_server_t* server, const void* packet, int size, int client_index, bool send_reliably)
-{
+void cn_server_send_to_all_but_one_client(cn_server_t* server, const void* packet, int size, int client_index, bool send_reliably) {
 	CN_ASSERT(client_index >= 0 && client_index < CN_SERVER_MAX_CLIENTS);
 	CN_ASSERT(cn_protocol_server_is_client_connected(server->p_server, client_index));
 
@@ -9146,8 +8563,7 @@ void cn_server_send_to_all_but_one_client(cn_server_t* server, const void* packe
 	}
 }
 
-void cn_server_enable_network_simulator(cn_server_t* server, double latency, double jitter, double drop_chance, double duplicate_chance)
-{
+void cn_server_enable_network_simulator(cn_server_t* server, double latency, double jitter, double drop_chance, double duplicate_chance) {
 	cn_protocol_server_enable_network_simulator(server->p_server, latency, jitter, drop_chance, duplicate_chance);
 }
 
@@ -9159,8 +8575,7 @@ void cn_server_enable_network_simulator(cn_server_t* server, double latency, dou
 
 typedef int (cn_test_fn)();
 
-typedef struct cn_test_t
-{
+typedef struct cn_test_t {
 	const char* test_name;
 	const char* description;
 	cn_test_fn* fn_ptr;
@@ -9182,8 +8597,7 @@ typedef struct cn_test_t
 #endif
 
 // https://docs.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences
-void windows_turn_on_console_color()
-{
+void windows_turn_on_console_color() {
 	HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
 	DWORD flags = 0;
 	GetConsoleMode(h, &flags);
@@ -9192,8 +8606,7 @@ void windows_turn_on_console_color()
 }
 #endif
 
-int cn_do_test(cn_test_t* test, int i)
-{
+int cn_do_test(cn_test_t* test, int i) {
 	const char* test_name = test->test_name;
 	const char* description = test->description;
 	CN_FPRINTF(CN_TEST_IO_STREAM, "Running test #%d\n\tName:         %s\n\tDescription:  %s\n\t", i, test_name, description);
@@ -9221,8 +8634,7 @@ int cn_do_test(cn_test_t* test, int i)
 // -------------------------------------------------------------------------------------------------
 // UNIT TESTS
 
-void cn_static_asserts()
-{
+void cn_static_asserts() {
 	CN_STATIC_ASSERT(sizeof(cn_crypto_key_t) == 32, cute_protocol_standard_calls_for_encryption_keys_to_be_32_bytes);
 	CN_STATIC_ASSERT(CN_PROTOCOL_VERSION_STRING_LEN == 10, cute_protocol_standard_calls_for_the_version_string_to_be_10_bytes);
 	CN_STATIC_ASSERT(CN_PROTOCOL_CONNECT_TOKEN_PACKET_SIZE == 1024, cute_protocol_standard_calls_for_connect_token_packet_to_be_exactly_1024_bytes);
@@ -9239,8 +8651,7 @@ void cn_static_asserts()
 }
 
 CN_TEST_CASE(cn_socket_init_send_recieve_shutdown, "Test sending one packet on an ipv4 socket, and then retrieve it.");
-int cn_socket_init_send_recieve_shutdown()
-{
+int cn_socket_init_send_recieve_shutdown() {
 	cn_socket_t socket;
 	CN_TEST_CHECK(cn_socket_init2(&socket, "127.0.0.1:5000", CN_MB, CN_MB));
 
@@ -9269,30 +8680,26 @@ int cn_socket_init_send_recieve_shutdown()
 }
 
 CN_TEST_CASE(cn_sequence_buffer_basic, "Create sequence buffer, insert a few entries, find them, remove them.");
-int cn_sequence_buffer_basic()
-{
+int cn_sequence_buffer_basic() {
 	cn_sequence_buffer_t sequence_buffer;
 	cn_sequence_buffer_t* buffer = &sequence_buffer;
 	CN_TEST_CHECK(cn_sequence_buffer_init(buffer, 256, sizeof(int), NULL, NULL));
 
 	int entries[3];
 	int count = sizeof(entries) / sizeof(entries[0]);
-	for (int i = 0; i < count; ++i)
-	{
+	for (int i = 0; i < count; ++i) {
 		int* entry = (int*)cn_sequence_buffer_insert(buffer, i, NULL);
 		CN_TEST_CHECK_POINTER(entry);
 		*entry = entries[i] = i;
 	}
 
-	for (int i = 0; i < count; ++i)
-	{
+	for (int i = 0; i < count; ++i) {
 		int* entry = (int*)cn_sequence_buffer_find(buffer, i);
 		CN_TEST_CHECK_POINTER(entry);
 		CN_TEST_ASSERT(*entry == entries[i]);
 	}
 
-	for (int i = 0; i < count; ++i)
-	{
+	for (int i = 0; i < count; ++i) {
 		cn_sequence_buffer_remove(buffer, i, NULL);
 		int* entry = (int*)cn_sequence_buffer_find(buffer, i);
 		CN_TEST_ASSERT(entry == NULL);
@@ -9304,21 +8711,18 @@ int cn_sequence_buffer_basic()
 }
 
 CN_TEST_CASE(cn_replay_buffer_valid_packets, "Typical use-case example, should pass all sequences.");
-int cn_replay_buffer_valid_packets()
-{
+int cn_replay_buffer_valid_packets() {
 	cn_protocol_replay_buffer_t buffer;
 	cn_protocol_replay_buffer_init(&buffer);
 
 	CN_TEST_ASSERT(buffer.max == 0);
 
-	for (int i = 0; i < CN_PROTOCOL_REPLAY_BUFFER_SIZE; ++i)
-	{
+	for (int i = 0; i < CN_PROTOCOL_REPLAY_BUFFER_SIZE; ++i) {
 		uint64_t sequence = buffer.entries[i];
 		CN_TEST_ASSERT(sequence == ~0ULL);
 	}
 
-	for (int i = 0; i < CN_PROTOCOL_REPLAY_BUFFER_SIZE; ++i)
-	{
+	for (int i = 0; i < CN_PROTOCOL_REPLAY_BUFFER_SIZE; ++i) {
 		CN_TEST_CHECK(cn_protocol_replay_buffer_cull_duplicate(&buffer, (uint64_t)i));
 		cn_protocol_replay_buffer_update(&buffer, (uint64_t)i);
 	}
@@ -9327,13 +8731,11 @@ int cn_replay_buffer_valid_packets()
 }
 
 CN_TEST_CASE(cn_replay_buffer_old_packet_out_of_range, "Replay buffer should cull packets of sequence older than `CN_REPLAY_BUFFER_SIZE`.");
-int cn_replay_buffer_old_packet_out_of_range()
-{
+int cn_replay_buffer_old_packet_out_of_range() {
 	cn_protocol_replay_buffer_t buffer;
 	cn_protocol_replay_buffer_init(&buffer);
 
-	for (int i = 0; i < CN_PROTOCOL_REPLAY_BUFFER_SIZE * 2; ++i)
-	{
+	for (int i = 0; i < CN_PROTOCOL_REPLAY_BUFFER_SIZE * 2; ++i) {
 		CN_TEST_CHECK(cn_protocol_replay_buffer_cull_duplicate(&buffer, (uint64_t)i));
 		cn_protocol_replay_buffer_update(&buffer, (uint64_t)i);
 	}
@@ -9344,13 +8746,11 @@ int cn_replay_buffer_old_packet_out_of_range()
 }
 
 CN_TEST_CASE(cn_replay_buffer_duplicate, "Pass in some valid nonces, and then assert the duplicate fails.");
-int cn_replay_buffer_duplicate()
-{
+int cn_replay_buffer_duplicate() {
 	cn_protocol_replay_buffer_t buffer;
 	cn_protocol_replay_buffer_init(&buffer);
 
-	for (int i = 0; i < CN_PROTOCOL_REPLAY_BUFFER_SIZE; ++i)
-	{
+	for (int i = 0; i < CN_PROTOCOL_REPLAY_BUFFER_SIZE; ++i) {
 		CN_TEST_CHECK(cn_protocol_replay_buffer_cull_duplicate(&buffer, (uint64_t)i));
 		cn_protocol_replay_buffer_update(&buffer, (uint64_t)i);
 	}
@@ -9361,8 +8761,7 @@ int cn_replay_buffer_duplicate()
 }
 
 CN_TEST_CASE(cn_hash_table_basic, "Create table, insert some elements, remove them, free table.");
-int cn_hash_table_basic()
-{
+int cn_hash_table_basic() {
 	cn_hashtable_t table;
 	cn_hashtable_init(&table, 8, 8, 20, NULL);
 
@@ -9381,8 +8780,7 @@ int cn_hash_table_basic()
 }
 
 CN_TEST_CASE(cn_hash_table_set, "Make sure the table also operates as a set (zero size value).");
-int cn_hash_table_set()
-{
+int cn_hash_table_set() {
 	cn_hashtable_t table;
 	cn_hashtable_init(&table, 8, 0, 20, NULL);
 
@@ -9399,27 +8797,23 @@ int cn_hash_table_set()
 }
 
 CN_TEST_CASE(cn_hash_table_hammer, "Fill up table, many lookups, and reset, all a few times.");
-int cn_hash_table_hammer()
-{
+int cn_hash_table_hammer() {
 	cn_hashtable_t table;
 	cn_hashtable_init(&table, 8, 8, 128, NULL);
 
 	uint64_t keys[128];
 	uint64_t items[128];
 
-	for (int i = 0; i < 128; ++i)
-	{
+	for (int i = 0; i < 128; ++i) {
 		keys[i] = i;
 		items[i] = i * 2;
 	}
 
-	for (int iters = 0; iters < 10; ++iters)
-	{
+	for (int iters = 0; iters < 10; ++iters) {
 		for (int i = 0; i < 128; ++i)
 			cn_hashtable_insert(&table, keys + i, items + i);
 
-		for (int i = 0; i < 128; ++i)
-		{
+		for (int i = 0; i < 128; ++i) {
 			void* item_ptr = cn_hashtable_find(&table, keys + i);
 			CN_TEST_CHECK_POINTER(item_ptr);
 			CN_TEST_ASSERT(*(uint64_t*)item_ptr == items[i]);
@@ -9436,8 +8830,7 @@ int cn_hash_table_hammer()
 
 
 CN_TEST_CASE(cn_handle_basic, "Typical use-case example, alloc and free some handles.");
-int cn_handle_basic()
-{
+int cn_handle_basic() {
 	cn_handle_allocator_t* table = cn_handle_allocator_create(1024, NULL);
 	CN_TEST_CHECK_POINTER(table);
 
@@ -9472,13 +8865,11 @@ int cn_handle_basic()
 }
 
 CN_TEST_CASE(cn_handle_large_loop, "Allocate right up the maximum size possible for the table.");
-int cn_handle_large_loop()
-{
+int cn_handle_large_loop() {
 	cn_handle_allocator_t* table = cn_handle_allocator_create(1024, NULL);
 	CN_TEST_CHECK_POINTER(table);
 
-	for (int i = 0; i < 1024; ++i)
-	{
+	for (int i = 0; i < 1024; ++i) {
 		cn_handle_t h = cn_handle_allocator_alloc(table, i);
 		CN_TEST_ASSERT(h != CN_INVALID_HANDLE);
 		CN_ASSERT(cn_handle_allocator_get_index(table, h) == (uint32_t)i);
@@ -9490,24 +8881,20 @@ int cn_handle_large_loop()
 }
 
 CN_TEST_CASE(cn_handle_large_loop_and_free, "\"Soak test\" to fill up the handle buffer and empty it a few times.");
-int cn_handle_large_loop_and_free()
-{
+int cn_handle_large_loop_and_free() {
 	cn_handle_allocator_t* table = cn_handle_allocator_create(1024, NULL);
 	CN_TEST_CHECK_POINTER(table);
 	cn_handle_t* handles = (cn_handle_t*)malloc(sizeof(cn_handle_t) * 2014);
 
-	for (int iters = 0; iters < 5; ++iters)
-	{
-		for (int i = 0; i < 1024; ++i)
-		{
+	for (int iters = 0; iters < 5; ++iters) {
+		for (int i = 0; i < 1024; ++i) {
 			cn_handle_t h = cn_handle_allocator_alloc(table, i);
 			CN_TEST_ASSERT(h != CN_INVALID_HANDLE);
 			CN_ASSERT(cn_handle_allocator_get_index(table, h) == (uint32_t)i);
 			handles[i] = h;
 		}
 
-		for (int i = 0; i < 1024; ++i)
-		{
+		for (int i = 0; i < 1024; ++i) {
 			cn_handle_t h = handles[i];
 			cn_handle_allocator_free(table, h);
 		}
@@ -9520,13 +8907,11 @@ int cn_handle_large_loop_and_free()
 }
 
 CN_TEST_CASE(cn_handle_alloc_too_many, "Allocating over 1024 entries should not result in failure.");
-int cn_handle_alloc_too_many()
-{
+int cn_handle_alloc_too_many() {
 	cn_handle_allocator_t* table = cn_handle_allocator_create(1024, NULL);
 	CN_TEST_CHECK_POINTER(table);
 
-	for (int i = 0; i < 1024; ++i)
-	{
+	for (int i = 0; i < 1024; ++i) {
 		cn_handle_t h = cn_handle_allocator_alloc(table, i);
 		CN_TEST_ASSERT(h != CN_INVALID_HANDLE);
 		CN_ASSERT(cn_handle_allocator_get_index(table, h) == (uint32_t)i);
@@ -9541,8 +8926,7 @@ int cn_handle_alloc_too_many()
 }
 
 CN_TEST_CASE(cn_encryption_map_basic, "Create map, make entry, lookup entry, remove, and cleanup.");
-int cn_encryption_map_basic()
-{
+int cn_encryption_map_basic() {
 	cn_protocol_encryption_map_t map;
 	cn_protocol_encryption_map_init(&map, NULL);
 
@@ -9572,8 +8956,7 @@ int cn_encryption_map_basic()
 }
 
 CN_TEST_CASE(cn_encryption_map_timeout_and_expiration, "Ensure timeouts and expirations remove entries properly.");
-int cn_encryption_map_timeout_and_expiration()
-{
+int cn_encryption_map_timeout_and_expiration() {
 	cn_protocol_encryption_map_t map;
 	cn_protocol_encryption_map_init(&map, NULL);
 
@@ -9642,8 +9025,7 @@ int cn_encryption_map_timeout_and_expiration()
 }
 
 CN_TEST_CASE(cn_doubly_list, "Make list of three elements, perform all operations on it, assert correctness.");
-int cn_doubly_list()
-{
+int cn_doubly_list() {
 	cn_list_t list;
 
 	cn_list_node_t a;
@@ -9680,8 +9062,7 @@ int cn_doubly_list()
 
 	cn_list_node_t* nodes[3] = { &b, &a, &c };
 	int index = 0;
-	for (cn_list_node_t* n = cn_list_begin(&list); n != cn_list_end(&list); n = n->next)
-	{
+	for (cn_list_node_t* n = cn_list_begin(&list); n != cn_list_end(&list); n = n->next) {
 		CN_TEST_ASSERT(n == nodes[index++]);
 	}
 
@@ -9695,8 +9076,7 @@ int cn_doubly_list()
 }
 
 CN_TEST_CASE(cn_crypto_encrypt_decrypt, "Generate key, encrypt a message, decrypt the message.");
-int cn_crypto_encrypt_decrypt()
-{
+int cn_crypto_encrypt_decrypt() {
 	cn_crypto_key_t k = crypto_generate_key();
 
 	const char* message_string = "The message.";
@@ -9715,8 +9095,7 @@ int cn_crypto_encrypt_decrypt()
 }
 
 CN_TEST_CASE(cn_connect_token_cache, "Add tokens, overflow (eject oldest), ensure LRU correctness.");
-int cn_connect_token_cache()
-{
+int cn_connect_token_cache() {
 	int capacity = 3;
 	cn_protocol_connect_token_cache_t cache;
 	cn_protocol_connect_token_cache_init(&cache, capacity, NULL);
@@ -9764,8 +9143,7 @@ int cn_connect_token_cache()
 }
 
 CN_TEST_CASE(cn_test_generate_connect_token, "Basic test to generate a connect token and assert the expected token.");
-int cn_test_generate_connect_token()
-{
+int cn_test_generate_connect_token() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -9814,8 +9192,7 @@ int cn_test_generate_connect_token()
 	CN_TEST_ASSERT(token.expiration_timestamp == expiration_timestamp);
 	CN_TEST_ASSERT(token.handshake_timeout == handshake_timeout);
 	CN_TEST_ASSERT(token.endpoint_count == 3);
-	for (int i = 0; i < token.endpoint_count; ++i)
-	{
+	for (int i = 0; i < token.endpoint_count; ++i) {
 		cn_endpoint_t endpoint;
 		CN_TEST_CHECK(cn_endpoint_init(&endpoint, endpoints[i]));
 		CN_TEST_ASSERT(cn_endpoint_equals(token.endpoints[i], endpoint));
@@ -9827,8 +9204,7 @@ int cn_test_generate_connect_token()
 	CN_TEST_ASSERT(decrypted_token.expiration_timestamp == expiration_timestamp);
 	CN_TEST_ASSERT(decrypted_token.handshake_timeout == handshake_timeout);
 	CN_TEST_ASSERT(decrypted_token.endpoint_count == 3);
-	for (int i = 0; i < token.endpoint_count; ++i)
-	{
+	for (int i = 0; i < token.endpoint_count; ++i) {
 		cn_endpoint_t endpoint;
 		CN_TEST_CHECK(cn_endpoint_init(&endpoint, endpoints[i]));
 		CN_TEST_ASSERT(cn_endpoint_equals(decrypted_token.endpoints[i], endpoint));
@@ -9841,8 +9217,7 @@ int cn_test_generate_connect_token()
 }
 
 CN_TEST_CASE(cn_client_server, "Connect a client to server, then disconnect and shutdown both.");
-int cn_client_server()
-{
+int cn_client_server() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	uint64_t application_id = 333;
@@ -9917,8 +9292,7 @@ int cn_client_server()
 }
 
 CN_TEST_CASE(cn_client_server_payload, "Connect a client to server, send some packets, then disconnect and shutdown both.");
-int cn_client_server_payload()
-{
+int cn_client_server_payload() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	uint64_t application_id = 333;
@@ -10013,8 +9387,7 @@ int cn_client_server_payload()
 }
 
 CN_TEST_CASE(cn_client_server_sim, "Run network simulator between a client and server.");
-int cn_client_server_sim()
-{
+int cn_client_server_sim() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	uint64_t application_id = 333;
@@ -10090,7 +9463,7 @@ int cn_client_server_sim()
 	bool do_send = true;
 	int packet_size = 1024 * 3;
 	void* packet = CN_ALLOC(packet_size, NULL);
-	double dt = 1.0/60.0;
+	double dt = 1.0 / 60.0;
 	iters = 0;
 
 	uint64_t keepalive = ~0ULL;
@@ -10139,8 +9512,7 @@ int cn_client_server_sim()
 	return 0;
 }
 
-typedef struct cn_test_transport_data_t
-{
+typedef struct cn_test_transport_data_t {
 	int drop_packet;
 	int id;
 	cn_ack_system_t* ack_system_a;
@@ -10149,8 +9521,7 @@ typedef struct cn_test_transport_data_t
 	cn_transport_t* transport_b;
 } cn_test_transport_data_t;
 
-cn_test_transport_data_t cn_test_transport_data_defaults()
-{
+cn_test_transport_data_t cn_test_transport_data_defaults() {
 	cn_test_transport_data_t data;
 	data.drop_packet = 0;
 	data.id = ~0;
@@ -10161,8 +9532,7 @@ cn_test_transport_data_t cn_test_transport_data_defaults()
 	return data;
 }
 
-cn_error_t cn_test_send_packet_fn(int index, void* packet, int size, void* udata)
-{
+cn_error_t cn_test_send_packet_fn(int index, void* packet, int size, void* udata) {
 	cn_test_transport_data_t* data = (cn_test_transport_data_t*)udata;
 	if (data->drop_packet) {
 		return cn_error_success();
@@ -10176,8 +9546,7 @@ cn_error_t cn_test_send_packet_fn(int index, void* packet, int size, void* udata
 }
 
 CN_TEST_CASE(cn_ack_system_basic, "Create ack system, send a few packets, and receive them. Make sure some drop. Assert acks.");
-int cn_ack_system_basic()
-{
+int cn_ack_system_basic() {
 	cn_test_transport_data_t data_a = cn_test_transport_data_defaults();
 	cn_test_transport_data_t data_b = cn_test_transport_data_defaults();
 	data_a.id = 0;
@@ -10199,8 +9568,7 @@ int cn_ack_system_basic()
 
 	uint64_t packet_data = 100;
 
-	for (int i = 0; i < 10; ++i)
-	{
+	for (int i = 0; i < 10; ++i) {
 		if ((i % 3) == 0) {
 			data_a.drop_packet = 1;
 			data_b.drop_packet = 1;
@@ -10229,8 +9597,7 @@ int cn_ack_system_basic()
 	int count_a = cn_ack_system_get_acks_count(ack_system_a);
 	int count_b = cn_ack_system_get_acks_count(ack_system_b);
 	CN_TEST_ASSERT(count_a - 1 == count_b);
-	for (int i = 0; i < count_b; ++i)
-	{
+	for (int i = 0; i < count_b; ++i) {
 		CN_TEST_ASSERT(acks_a[i] == acks_b[i]);
 		CN_TEST_ASSERT(acks_a[i] != 0);
 		CN_TEST_ASSERT(acks_a[i] != 3);
@@ -10244,13 +9611,12 @@ int cn_ack_system_basic()
 	return 0;
 }
 
-cn_error_t cn_test_transport_send_packet_fn(int index, void* packet, int size, void* udata)
-{
+cn_error_t cn_test_transport_send_packet_fn(int index, void* packet, int size, void* udata) {
 	cn_test_transport_data_t* data = (cn_test_transport_data_t*)udata;
 	if (data->drop_packet) {
 		return cn_error_success();
 	}
-	
+
 	if (data->id) {
 		return cn_transport_process_packet(data->transport_a, packet, size);
 	} else {
@@ -10258,15 +9624,13 @@ cn_error_t cn_test_transport_send_packet_fn(int index, void* packet, int size, v
 	}
 }
 
-cn_error_t cn_test_transport_open_packet_fn(int index, void* packet, int size, void* udata)
-{
+cn_error_t cn_test_transport_open_packet_fn(int index, void* packet, int size, void* udata) {
 	cn_test_transport_data_t* data = (cn_test_transport_data_t*)udata;
 	return cn_error_success();
 }
 
 CN_TEST_CASE(cn_transport_basic, "Create transport, send a couple packets, receive them.");
-int cn_transport_basic()
-{
+int cn_transport_basic() {
 	cn_test_transport_data_t data_a = cn_test_transport_data_defaults();
 	cn_test_transport_data_t data_b = cn_test_transport_data_defaults();
 	data_a.id = 0;
@@ -10282,7 +9646,7 @@ int cn_transport_basic()
 	data_a.transport_b = transport_b;
 	data_b.transport_a = transport_a;
 	data_b.transport_b = transport_b;
-	double dt = 1.0/60.0;
+	double dt = 1.0 / 60.0;
 
 	int packet_size = 4000;
 	uint8_t* packet = (uint8_t*)CN_ALLOC(packet_size, NULL);
@@ -10332,8 +9696,7 @@ int cn_transport_basic()
 }
 
 CN_TEST_CASE(cn_transport_drop_fragments, "Create transport, send a couple packets, receive them under packet loss.");
-int cn_transport_drop_fragments()
-{
+int cn_transport_drop_fragments() {
 	cn_test_transport_data_t data_a = cn_test_transport_data_defaults();
 	cn_test_transport_data_t data_b = cn_test_transport_data_defaults();
 	data_a.id = 0;
@@ -10349,7 +9712,7 @@ int cn_transport_drop_fragments()
 	data_a.transport_b = transport_b;
 	data_b.transport_a = transport_a;
 	data_b.transport_b = transport_b;
-	double dt = 1.0/60.0;
+	double dt = 1.0 / 60.0;
 
 	int packet_size = 4000;
 	uint8_t* packet = (uint8_t*)CN_ALLOC(packet_size, NULL);
@@ -10408,8 +9771,7 @@ int cn_transport_drop_fragments()
 	return 0;
 }
 
-int cn_send_packet_many_drops_fn(int index, void* packet, int size, void* udata)
-{
+int cn_send_packet_many_drops_fn(int index, void* packet, int size, void* udata) {
 	cn_test_transport_data_t* data = (cn_test_transport_data_t*)udata;
 	if (rand() % 100 != 0) return 0;
 
@@ -10417,15 +9779,14 @@ int cn_send_packet_many_drops_fn(int index, void* packet, int size, void* udata)
 }
 
 CN_TEST_CASE(cn_transport_drop_fragments_reliable_hammer, "Create and send many fragments under extreme packet loss.");
-int cn_transport_drop_fragments_reliable_hammer()
-{
+int cn_transport_drop_fragments_reliable_hammer() {
 	srand(0);
 
 	cn_test_transport_data_t data_a = cn_test_transport_data_defaults();
 	cn_test_transport_data_t data_b = cn_test_transport_data_defaults();
 	data_a.id = 0;
 	data_b.id = 1;
-	double dt = 1.0/60.0;
+	double dt = 1.0 / 60.0;
 
 	cn_transport_config_t config = cn_transport_config_defaults();
 	config.send_packet_fn = cn_test_transport_send_packet_fn;
@@ -10455,8 +9816,7 @@ int cn_transport_drop_fragments_reliable_hammer()
 	int iters = 0;
 	int received = 0;
 
-	while (1)
-	{
+	while (1) {
 		CN_TEST_CHECK(cn_is_error(cn_transport_send(transport_a, fire_and_forget_packet, fire_and_forget_packet_size, false)));
 		CN_TEST_CHECK(cn_is_error(cn_transport_send(transport_b, fire_and_forget_packet, fire_and_forget_packet_size, false)));
 
@@ -10469,7 +9829,7 @@ int cn_transport_drop_fragments_reliable_hammer()
 			received = 1;
 			cn_transport_free_packet(transport_b, packet_received);
 		}
-	
+
 		if (received && cn_transport_unacked_fragment_count(transport_a) == 0) {
 			break;
 		}
@@ -10490,8 +9850,7 @@ int cn_transport_drop_fragments_reliable_hammer()
 }
 
 CN_TEST_CASE(cn_packet_connection_accepted, "Write, encrypt, decrypt, and assert the *connection accepted packet*.");
-int cn_packet_connection_accepted()
-{
+int cn_packet_connection_accepted() {
 	cn_crypto_key_t key = crypto_generate_key();
 	uint64_t sequence = 100;
 
@@ -10521,8 +9880,7 @@ int cn_packet_connection_accepted()
 }
 
 CN_TEST_CASE(cn_packet_connection_denied, "Write, encrypt, decrypt, and assert the *connection denied packet*.");
-int cn_packet_connection_denied()
-{
+int cn_packet_connection_denied() {
 	cn_crypto_key_t key = crypto_generate_key();
 	uint64_t sequence = 100;
 
@@ -10546,8 +9904,7 @@ int cn_packet_connection_denied()
 }
 
 CN_TEST_CASE(cn_packet_keepalive, "Write, encrypt, decrypt, and assert the *keepalive packet*.");
-int cn_packet_keepalive()
-{
+int cn_packet_keepalive() {
 	cn_crypto_key_t key = crypto_generate_key();
 	uint64_t sequence = 100;
 
@@ -10571,8 +9928,7 @@ int cn_packet_keepalive()
 }
 
 CN_TEST_CASE(cn_packet_disconnect, "Write, encrypt, decrypt, and assert the *disconnect packet*.");
-int cn_packet_disconnect()
-{
+int cn_packet_disconnect() {
 	cn_crypto_key_t key = crypto_generate_key();
 	uint64_t sequence = 100;
 
@@ -10596,8 +9952,7 @@ int cn_packet_disconnect()
 }
 
 CN_TEST_CASE(cn_packet_challenge, "Write, encrypt, decrypt, and assert the *challenge request packet* and *challenge response packet*.");
-int cn_packet_challenge()
-{
+int cn_packet_challenge() {
 	cn_crypto_key_t key = crypto_generate_key();
 	uint64_t sequence = 100;
 
@@ -10625,8 +9980,7 @@ int cn_packet_challenge()
 }
 
 CN_TEST_CASE(cn_packet_payload, "Write, encrypt, decrypt, and assert the *payload packet*.");
-int cn_packet_payload()
-{
+int cn_packet_payload() {
 	cn_crypto_key_t key = crypto_generate_key();
 	uint64_t sequence = 100;
 
@@ -10654,8 +10008,7 @@ int cn_packet_payload()
 }
 
 CN_TEST_CASE(cn_protocol_client_server, "Create client and server, perform connection handshake, then disconnect.");
-int cn_protocol_client_server()
-{
+int cn_protocol_client_server() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -10701,8 +10054,7 @@ int cn_protocol_client_server()
 	CN_TEST_CHECK(cn_is_error(cn_protocol_client_connect(client, connect_token)));
 
 	int iters = 0;
-	while (iters++ < 100)
-	{
+	while (iters++ < 100) {
 		cn_protocol_client_update(client, 0, 0);
 		cn_protocol_server_update(server, 0, 0);
 
@@ -10723,8 +10075,7 @@ int cn_protocol_client_server()
 }
 
 CN_TEST_CASE(cn_protocol_client_no_server_responses, "Client tries to connect to servers, but none respond at all.");
-int cn_protocol_client_no_server_responses()
-{
+int cn_protocol_client_no_server_responses() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -10767,8 +10118,7 @@ int cn_protocol_client_no_server_responses()
 	CN_TEST_CHECK(cn_is_error(cn_protocol_client_connect(client, connect_token)));
 
 	int iters = 0;
-	while (iters++ < 100)
-	{
+	while (iters++ < 100) {
 		cn_protocol_client_update(client, 10, 0);
 
 		if (cn_protocol_client_get_state(client) <= 0) break;
@@ -10783,8 +10133,7 @@ int cn_protocol_client_no_server_responses()
 }
 
 CN_TEST_CASE(cn_protocol_client_server_list, "Client tries to connect to servers, but only third responds.");
-int cn_protocol_client_server_list()
-{
+int cn_protocol_client_server_list() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -10832,8 +10181,7 @@ int cn_protocol_client_server_list()
 	CN_TEST_CHECK(cn_is_error(cn_protocol_client_connect(client, connect_token)));
 
 	int iters = 0;
-	while (iters++ < 100)
-	{
+	while (iters++ < 100) {
 		cn_protocol_client_update(client, 1, 0);
 		cn_protocol_server_update(server, 0, 0);
 
@@ -10854,8 +10202,7 @@ int cn_protocol_client_server_list()
 }
 
 CN_TEST_CASE(cn_protocol_server_challenge_response_timeout, "Client times out when sending challenge response.");
-int cn_protocol_server_challenge_response_timeout()
-{
+int cn_protocol_server_challenge_response_timeout() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -10901,8 +10248,7 @@ int cn_protocol_server_challenge_response_timeout()
 	CN_TEST_CHECK(cn_is_error(cn_protocol_client_connect(client, connect_token)));
 
 	int iters = 0;
-	while (iters++ < 100)
-	{
+	while (iters++ < 100) {
 		cn_protocol_client_update(client, 0.1, 0);
 
 		if (cn_protocol_client_get_state(client) != CN_PROTOCOL_CLIENT_STATE_SENDING_CHALLENGE_RESPONSE) {
@@ -10926,8 +10272,7 @@ int cn_protocol_server_challenge_response_timeout()
 }
 
 CN_TEST_CASE(cn_protocol_client_expired_token, "Client gets an expired token before connecting.");
-int cn_protocol_client_expired_token()
-{
+int cn_protocol_client_expired_token() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -10976,8 +10321,7 @@ int cn_protocol_client_expired_token()
 }
 
 CN_TEST_CASE(cn_protocol_client_connect_expired_token, "Client detects its own token expires in the middle of a handshake.");
-int cn_protocol_client_connect_expired_token()
-{
+int cn_protocol_client_connect_expired_token() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -11024,8 +10368,7 @@ int cn_protocol_client_connect_expired_token()
 
 	int iters = 0;
 	uint64_t time = 0;
-	while (iters++ < 100)
-	{
+	while (iters++ < 100) {
 		cn_protocol_client_update(client, 0, time++);
 		cn_protocol_server_update(server, 0, 0);
 
@@ -11046,8 +10389,7 @@ int cn_protocol_client_connect_expired_token()
 }
 
 CN_TEST_CASE(cn_protocol_server_connect_expired_token, "Server detects token expires in the middle of a handshake.");
-int cn_protocol_server_connect_expired_token()
-{
+int cn_protocol_server_connect_expired_token() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -11094,8 +10436,7 @@ int cn_protocol_server_connect_expired_token()
 
 	int iters = 0;
 	uint64_t time = 0;
-	while (iters++ < 100)
-	{
+	while (iters++ < 100) {
 		++time;
 		cn_protocol_client_update(client, 0, time - 1);
 		cn_protocol_server_update(server, 0, time);
@@ -11117,8 +10458,7 @@ int cn_protocol_server_connect_expired_token()
 }
 
 CN_TEST_CASE(cn_protocol_client_bad_keys, "Client attempts to connect without keys from REST SECTION of connect token.");
-int cn_protocol_client_bad_keys()
-{
+int cn_protocol_client_bad_keys() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -11168,8 +10508,7 @@ int cn_protocol_client_bad_keys()
 	client->connect_token.server_to_client_key = crypto_generate_key();
 
 	int iters = 0;
-	while (iters++ < 100)
-	{
+	while (iters++ < 100) {
 		cn_protocol_client_update(client, 1, 0);
 		cn_protocol_server_update(server, 1, 0);
 
@@ -11190,8 +10529,7 @@ int cn_protocol_client_bad_keys()
 }
 
 CN_TEST_CASE(cn_protocol_server_not_in_list_but_gets_request, "Client tries to connect to server, but token does not contain server endpoint.");
-int cn_protocol_server_not_in_list_but_gets_request()
-{
+int cn_protocol_server_not_in_list_but_gets_request() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -11240,8 +10578,7 @@ int cn_protocol_server_not_in_list_but_gets_request()
 	CN_TEST_CHECK(cn_endpoint_init(client->connect_token.endpoints, "[::1]:5000"));
 
 	int iters = 0;
-	while (iters++ < 100)
-	{
+	while (iters++ < 100) {
 		cn_protocol_client_update(client, 1, 0);
 		cn_protocol_server_update(server, 1, 0);
 
@@ -11262,8 +10599,7 @@ int cn_protocol_server_not_in_list_but_gets_request()
 }
 
 CN_TEST_CASE(cn_protocol_connect_a_few_clients, "Multiple clients connecting to one server.");
-int cn_protocol_connect_a_few_clients()
-{
+int cn_protocol_connect_a_few_clients() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -11351,8 +10687,7 @@ int cn_protocol_connect_a_few_clients()
 
 	int iters = 0;
 	float dt = 1.0f / 60.0f;
-	while (iters++ < 100)
-	{
+	while (iters++ < 100) {
 		cn_protocol_client_update(client0, dt, 0);
 		cn_protocol_client_update(client1, dt, 0);
 		cn_protocol_client_update(client2, dt, 0);
@@ -11362,8 +10697,8 @@ int cn_protocol_connect_a_few_clients()
 		if (cn_protocol_client_get_state(client1) <= 0) break;
 		if (cn_protocol_client_get_state(client2) <= 0) break;
 		if (cn_protocol_client_get_state(client0) == CN_PROTOCOL_CLIENT_STATE_CONNECTED &&
-		    cn_protocol_client_get_state(client1) == CN_PROTOCOL_CLIENT_STATE_CONNECTED &&
-		    cn_protocol_client_get_state(client2) == CN_PROTOCOL_CLIENT_STATE_CONNECTED) break;
+			cn_protocol_client_get_state(client1) == CN_PROTOCOL_CLIENT_STATE_CONNECTED &&
+			cn_protocol_client_get_state(client2) == CN_PROTOCOL_CLIENT_STATE_CONNECTED) break;
 	}
 	CN_TEST_ASSERT(cn_protocol_server_running(server));
 	CN_TEST_ASSERT(iters < 100);
@@ -11385,8 +10720,7 @@ int cn_protocol_connect_a_few_clients()
 }
 
 CN_TEST_CASE(cn_protocol_keepalive, "Client and server setup connection and maintain it through keepalive packets.");
-int cn_protocol_keepalive()
-{
+int cn_protocol_keepalive() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -11432,8 +10766,7 @@ int cn_protocol_keepalive()
 
 	int iters = 0;
 	float dt = 1.0f / 60.0f;
-	while (iters++ < 1000)
-	{
+	while (iters++ < 1000) {
 		cn_protocol_client_update(client, dt, 0);
 		cn_protocol_server_update(server, dt, 0);
 
@@ -11453,8 +10786,7 @@ int cn_protocol_keepalive()
 }
 
 CN_TEST_CASE(cn_protocol_client_initiated_disconnect, "Client initiates disconnect, assert disconnect occurs cleanly.");
-int cn_protocol_client_initiated_disconnect()
-{
+int cn_protocol_client_initiated_disconnect() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -11500,8 +10832,7 @@ int cn_protocol_client_initiated_disconnect()
 
 	int iters = 0;
 	float dt = 1.0f / 60.0f;
-	while (iters++ < 1000)
-	{
+	while (iters++ < 1000) {
 		if (cn_protocol_client_get_state(client) > 0) {
 			cn_protocol_client_update(client, dt, 0);
 		}
@@ -11529,8 +10860,7 @@ int cn_protocol_client_initiated_disconnect()
 }
 
 CN_TEST_CASE(cn_protocol_server_initiated_disconnect, "Server initiates disconnect, assert disconnect occurs cleanly.");
-int cn_protocol_server_initiated_disconnect()
-{
+int cn_protocol_server_initiated_disconnect() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -11578,8 +10908,7 @@ int cn_protocol_server_initiated_disconnect()
 
 	int iters = 0;
 	float dt = 1.0f / 60.0f;
-	while (iters++ < 1000)
-	{
+	while (iters++ < 1000) {
 		cn_protocol_client_update(client, dt, 0);
 		cn_protocol_server_update(server, dt, 0);
 
@@ -11613,8 +10942,7 @@ int cn_protocol_server_initiated_disconnect()
 }
 
 CN_TEST_CASE(cn_protocol_client_server_payloads, "Client and server connect and send payload packets. Server should confirm client.");
-int cn_protocol_client_server_payloads()
-{
+int cn_protocol_client_server_payloads() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -11667,8 +10995,7 @@ int cn_protocol_client_server_payloads()
 	float dt = 1.0f / 60.0f;
 	int payloads_received_by_server = 0;
 	int payloads_received_by_client = 0;
-	while (iters++ < 1000)
-	{
+	while (iters++ < 1000) {
 		cn_protocol_client_update(client, dt, 0);
 		cn_protocol_server_update(server, dt, 0);
 
@@ -11721,8 +11048,7 @@ int cn_protocol_client_server_payloads()
 }
 
 CN_TEST_CASE(cn_protocol_multiple_connections_and_payloads, "A server hosts multiple simultaneous clients with payloads and random disconnects/connects.");
-int cn_protocol_multiple_connections_and_payloads()
-{
+int cn_protocol_multiple_connections_and_payloads() {
 	cn_crypto_sign_public_t pk;
 	cn_crypto_sign_secret_t sk;
 	cn_crypto_sign_keygen(&pk, &sk);
@@ -11747,8 +11073,7 @@ int cn_protocol_multiple_connections_and_payloads()
 
 	cn_protocol_client_t** clients = (cn_protocol_client_t**)CN_ALLOC(sizeof(cn_protocol_client_t*) * max_clients, NULL);
 
-	for (int i = 0; i < max_clients; ++i)
-	{
+	for (int i = 0; i < max_clients; ++i) {
 		cn_crypto_key_t client_to_server_key = crypto_generate_key();
 		cn_crypto_key_t server_to_client_key = crypto_generate_key();
 		uint64_t client_id = (uint64_t)i;
@@ -11831,12 +11156,10 @@ int cn_protocol_multiple_connections_and_payloads()
 			}
 		}
 	}
-	for (int i = 0; i < client_count; ++i)
-	{
+	for (int i = 0; i < client_count; ++i) {
 		CN_TEST_ASSERT(payloads_received_by_client[i] >= 1);
 	}
-	for (int i = 0; i < max_clients; ++i)
-	{
+	for (int i = 0; i < max_clients; ++i) {
 		cn_protocol_client_update(clients[i], 0, 0);
 		if (i >= client_count) {
 			CN_TEST_ASSERT(cn_protocol_client_get_state(clients[i]) == CN_PROTOCOL_CLIENT_STATE_DISCONNECTED);
@@ -11858,8 +11181,7 @@ int cn_protocol_multiple_connections_and_payloads()
 }
 
 CN_TEST_CASE(cn_protocol_client_reconnect, "Client connects to server, disconnects, and reconnects.");
-int cn_protocol_client_reconnect()
-{
+int cn_protocol_client_reconnect() {
 	cn_crypto_key_t client_to_server_key = crypto_generate_key();
 	cn_crypto_key_t server_to_client_key = crypto_generate_key();
 	cn_crypto_sign_public_t pk;
@@ -11906,8 +11228,7 @@ int cn_protocol_client_reconnect()
 
 	// Connect client.
 	int iters = 0;
-	while (iters++ < 100)
-	{
+	while (iters++ < 100) {
 		cn_protocol_client_update(client, 0, 0);
 		cn_protocol_server_update(server, 0, 0);
 
@@ -11923,8 +11244,7 @@ int cn_protocol_client_reconnect()
 	CN_TEST_ASSERT(cn_protocol_client_get_state(client) == CN_PROTOCOL_CLIENT_STATE_DISCONNECTED);
 
 	iters = 0;
-	while (iters++ < 100)
-	{
+	while (iters++ < 100) {
 		cn_protocol_server_update(server, 0, 0);
 		if (cn_protocol_server_client_count(server) == 0) break;
 	}
@@ -11949,8 +11269,7 @@ int cn_protocol_client_reconnect()
 	// Reconnect client.
 	CN_TEST_CHECK(cn_is_error(cn_protocol_client_connect(client, connect_token)));
 	iters = 0;
-	while (iters++ < 100)
-	{
+	while (iters++ < 100) {
 		cn_protocol_client_update(client, 0, 0);
 		cn_protocol_server_update(server, 0, 0);
 
@@ -11973,8 +11292,7 @@ int cn_protocol_client_reconnect()
 
 // -------------------------------------------------------------------------------------------------
 
-int cn_run_tests(int which_test, bool soak)
-{
+int cn_run_tests(int which_test, bool soak) {
 	if (cn_is_error(cn_init())) {
 		return -1;
 	}
@@ -12040,15 +11358,13 @@ int cn_run_tests(int which_test, bool soak)
 		CN_TEST_CASE_ENTRY(cn_protocol_multiple_connections_and_payloads),
 		CN_TEST_CASE_ENTRY(cn_protocol_client_reconnect),
 	};
-	
+
 	int test_count = sizeof(tests) / sizeof(*tests);
 	int fail_count = 0;
 
 	if (soak) {
-		while (1)
-		{
-			for (int i = 0; i < test_count; ++i)
-			{
+		while (1) {
+			for (int i = 0; i < test_count; ++i) {
 				cn_test_t* test = tests + i;
 				int result = cn_do_test(test, i + 1);
 				if (result) goto break_soak;
@@ -12058,8 +11374,7 @@ int cn_run_tests(int which_test, bool soak)
 
 	// Run all tests.
 	if (which_test == -1) {
-		for (int i = 0; i < test_count; ++i)
-		{
+		for (int i = 0; i < test_count; ++i) {
 			cn_test_t* test = tests + i;
 			if (cn_do_test(test, i + 1)) fail_count++;
 		}
@@ -12097,29 +11412,29 @@ break_soak:
 	including commercial applications, and to alter it and redistribute it
 	freely, subject to the following restrictions:
 	  1. The origin of this software must not be misrepresented; you must not
-	     claim that you wrote the original software. If you use this software
-	     in a product, an acknowledgment in the product documentation would be
-	     appreciated but is not required.
+		 claim that you wrote the original software. If you use this software
+		 in a product, an acknowledgment in the product documentation would be
+		 appreciated but is not required.
 	  2. Altered source versions must be plainly marked as such, and must not
-	     be misrepresented as being the original software.
+		 be misrepresented as being the original software.
 	  3. This notice may not be removed or altered from any source distribution.
 	------------------------------------------------------------------------------
 	ALTERNATIVE B - Public Domain (www.unlicense.org)
 	This is free and unencumbered software released into the public domain.
-	Anyone is free to copy, modify, publish, use, compile, sell, or distribute this 
-	software, either in source code form or as a compiled binary, for any purpose, 
+	Anyone is free to copy, modify, publish, use, compile, sell, or distribute this
+	software, either in source code form or as a compiled binary, for any purpose,
 	commercial or non-commercial, and by any means.
-	In jurisdictions that recognize copyright laws, the author or authors of this 
-	software dedicate any and all copyright interest in the software to the public 
-	domain. We make this dedication for the benefit of the public at large and to 
-	the detriment of our heirs and successors. We intend this dedication to be an 
-	overt act of relinquishment in perpetuity of all present and future rights to 
+	In jurisdictions that recognize copyright laws, the author or authors of this
+	software dedicate any and all copyright interest in the software to the public
+	domain. We make this dedication for the benefit of the public at large and to
+	the detriment of our heirs and successors. We intend this dedication to be an
+	overt act of relinquishment in perpetuity of all present and future rights to
 	this software under copyright law.
-	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
-	IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, 
-	FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE 
-	AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN 
-	ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION 
+	THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+	IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+	FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+	AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+	ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 	WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 	------------------------------------------------------------------------------
 */
